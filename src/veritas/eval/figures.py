@@ -24,6 +24,8 @@ TEXT_SECONDARY = "#52514e"
 GRID = "#e6e5e1"
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # slots 1-4, fixed order
 MARKERS = ["o", "s", "^", "D"]
+# The ensemble often coincides with a component detector; dashing keeps both lines visible.
+LINESTYLES = ["-", "-", "-", (0, (4, 2))]
 BLUE_RAMP = LinearSegmentedColormap.from_list(
     "seq_blue", ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
 )
@@ -134,7 +136,8 @@ def evasion_curve(report: dict[str, Any], out: Path) -> Path | None:
     end_labels: list[tuple[float, float, str]] = []
     for idx, label, points in lines:
         xs, ys = zip(*points, strict=True)
-        ax.plot(xs, ys, color=SERIES[idx], linewidth=2, marker=MARKERS[idx], markersize=6,
+        ax.plot(xs, ys, color=SERIES[idx], linewidth=2, linestyle=LINESTYLES[idx],
+                marker=MARKERS[idx], markersize=6,
                 markeredgecolor=SURFACE, markeredgewidth=1.5, label=label)
         end_labels.append((xs[-1], ys[-1], label))
     # Direct end labels, nudged apart so coincident endpoints stay readable.
