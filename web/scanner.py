@@ -26,7 +26,8 @@ from typing import Any
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-TWIN_DB_PATH = ROOT / "data" / "processed" / "twin" / "twin.db"
+# Kept apart from the research twin (data/processed/twin/twin.db) — see _ingest_to_twin_db.
+LIVE_SCAN_DB_PATH = ROOT / "data" / "processed" / "twin" / "live_scans.db"
 
 logger = logging.getLogger("veritas.scanner")
 
@@ -122,20 +123,23 @@ class LiveSecurityScanner:
         dns_res = await self._test_dns(hostname)
         tests.append(dns_res["test"])
         ip_addresses = dns_res["ips"]
-        primary_ip = ip_addresses[0] if ip_addresses else "127.0.0.1"
+        primary_ip = ip_addresses[0] if ip_addresses else None
 
-        # 2. Port & Transport Probing
-        port_res = await self._test_ports(primary_ip, port)
-        tests.append(port_res["test"])
-        open_ports = port_res["open_ports"]
+        # 2. Port & Transport Probing. Never fall back to scanning this machine when the target
+        # does not resolve — that would report our own open ports as the target's.
+        if primary_ip is not None:
+            port_res = await self._test_ports(primary_ip, port)
+            tests.append(port_res["test"])
+            open_ports = port_res["open_ports"]
 
-        # If 443 is open but user didn't specify scheme, prefer HTTPS
-        if 443 in open_ports and not target.startswith("http://"):
-            use_https = True
-            port = 443
-        elif 443 not in open_ports and 80 in open_ports:
-            use_https = False
-            port = 80
+        # Pick the scheme/port only when the user did not name one.
+        if not parsed["explicit_port"]:
+            if 443 in open_ports:
+                use_https = True
+                port = 443
+            elif 80 in open_ports:
+                use_https = False
+                port = 80
 
         # 3. SSL/TLS Certificate & Cipher Suite Audit
         tls_info = {}
@@ -231,7 +235,9 @@ class LiveSecurityScanner:
             posture_class = "health-vulnerable"
 
         # Generate Recommended Preventions
-        preventions = self._generate_preventions(tests, hostname, primary_ip, port, use_https)
+        preventions = self._generate_preventions(
+            tests, hostname, primary_ip or hostname, port, use_https
+        )
 
         report = ScanReport(
             target_input=target,
@@ -259,28 +265,41 @@ class LiveSecurityScanner:
         return report
 
     async def _normalize_target(self, target: str) -> dict[str, Any]:
+        """
+        Parse `host`, `host:port`, `host/path`, `[v6]:port` or a full URL.
+
+        `explicit_port` records whether the user named a port or scheme; only when they did not
+        may the scanner pick one for them.
+        """
         target = target.strip()
-        has_http_prefix = target.startswith("http://")
-        has_https_prefix = target.startswith("https://")
+        if not target:
+            raise ValueError("empty scan target")
 
-        if not has_http_prefix and not has_https_prefix:
-            if ":" in target and not target.endswith("/"):
-                parts = target.split(":")
-                return {"hostname": parts[0], "port": int(parts[1]), "use_https": parts[1] == "443"}
-            
-            # Test if port 443 is open before picking scheme
-            hostname = target.split("/")[0]
-            is_443_open = await self._is_port_open(hostname, 443, timeout=0.6)
-            if is_443_open:
-                return {"hostname": hostname, "port": 443, "use_https": True}
-            else:
-                return {"hostname": hostname, "port": 80, "use_https": False}
+        has_scheme = target.startswith(("http://", "https://"))
+        parsed = urllib.parse.urlparse(target if has_scheme else f"//{target}")
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError(f"could not parse a hostname from {target!r}")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"invalid port in {target!r}") from exc
 
-        parsed = urllib.parse.urlparse(target)
-        hostname = parsed.hostname or "localhost"
-        use_https = parsed.scheme == "https"
-        port = parsed.port or (443 if use_https else 80)
-        return {"hostname": hostname, "port": port, "use_https": use_https}
+        if has_scheme:
+            use_https = parsed.scheme == "https"
+            return {
+                "hostname": hostname,
+                "port": port or (443 if use_https else 80),
+                "use_https": use_https,
+                "explicit_port": True,
+            }
+        if port is not None:
+            return {"hostname": hostname, "port": port, "use_https": port == 443, "explicit_port": True}
+
+        # Test if port 443 is open before picking scheme
+        if await self._is_port_open(hostname, 443, timeout=0.6):
+            return {"hostname": hostname, "port": 443, "use_https": True, "explicit_port": False}
+        return {"hostname": hostname, "port": 80, "use_https": False, "explicit_port": False}
 
     async def _is_port_open(self, host: str, port: int, timeout: float = 0.6) -> bool:
         try:
@@ -681,12 +700,15 @@ class LiveSecurityScanner:
     async def _test_sensitive_paths(self, hostname: str, port: int, use_https: bool) -> dict[str, Any]:
         base_url = f"{'https' if use_https else 'http'}://{hostname}:{port}" if (port != 443 and port != 80) else f"{'https' if use_https else 'http'}://{hostname}"
         exposed_paths = []
+        responded = 0
 
         try:
             async with httpx.AsyncClient(timeout=1.2, verify=False) as client:
                 async def check_path(path: str):
+                    nonlocal responded
                     try:
                         resp = await client.get(f"{base_url}{path}", follow_redirects=False)
+                        responded += 1
                         if resp.status_code in (200, 301, 302) and len(resp.content) > 0:
                             if "404" not in resp.text[:200].lower():
                                 return path
@@ -708,6 +730,12 @@ class LiveSecurityScanner:
             impact = 25
             obs = f"CRITICAL LEAK DETECTED: {exposed_paths} publicly accessible!"
             remediation = "Instantly block web access to dotfiles (/.env, /.git) using web server access rules."
+        elif responded == 0:
+            # Nothing answered, so nothing was tested. That is not a pass.
+            status = "info"
+            impact = 0
+            obs = f"Not tested: {base_url} did not respond to any of {len(self.RECON_PATHS)} probes"
+            remediation = "Confirm the target is reachable, then re-run the scan."
         elif exposed_paths:
             status = "warning"
             impact = 8
@@ -716,7 +744,10 @@ class LiveSecurityScanner:
         else:
             status = "passed"
             impact = 0
-            obs = "Zero sensitive dotfiles or environment secrets exposed (0/10 probed)"
+            obs = (
+                "Zero sensitive dotfiles or environment secrets exposed "
+                f"(0/{len(self.RECON_PATHS)} probed)"
+            )
             remediation = "Maintain strict directory traversal and hidden file access controls."
 
         test = SecurityTestResult(
@@ -752,7 +783,7 @@ class LiveSecurityScanner:
             id="TEST-QUIC-H3",
             name="QUIC Protocol & HTTP/3 Transport Capability",
             category="Next-Gen Protocol",
-            status="passed",
+            status=status,
             score_impact=0,
             metric="HTTP/3 Support",
             observed_value=obs,
@@ -873,28 +904,47 @@ iptables -A INPUT -p tcp -d {ip} --dport {port} -m connlimit --connlimit-above 5
         return preventions
 
     def _ingest_to_twin_db(self, report: ScanReport) -> None:
+        """
+        Record the scan in the *live-scan* store, never in the research twin.
+
+        The research twin (`twin.db`) is the ground-truth oracle for the agent, the split and the
+        baselines; mixing in live scans would inject flows with invented labels into every
+        experiment. Attacker-influenced strings (SNI, cipher and TLS version text) go in the
+        untrusted side channel, keeping the measured oracle numeric.
+        """
         try:
             from veritas.twin.store import TwinStore
-            store = TwinStore(TWIN_DB_PATH)
+
+            measured: dict[str, Any] = {}
+            untrusted = dict(report.metadata_untrusted)
+            for key, value in report.twin_features.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    measured[key] = value
+                else:
+                    untrusted[key] = value
+
+            store = TwinStore(LIVE_SCAN_DB_PATH)
             flow_id = hashlib.sha256(f"{report.hostname}:{report.scan_timestamp}".encode()).hexdigest()[:16]
-            
+
             store.upsert_flow(
                 flow_id=flow_id,
-                capture_id=f"live_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                capture_id=f"live_audit_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
                 pcap_source="live_socket_instrumentation",
                 src_ip="127.0.0.1",
-                dst_ip=report.ip_addresses[0] if report.ip_addresses else "127.0.0.1",
-                src_port=54321,
+                dst_ip=report.ip_addresses[0] if report.ip_addresses else report.hostname,
+                src_port=0,
                 dst_port=report.port,
                 protocol=17 if "QUIC" in report.protocol else 6,
-                measured_features=report.twin_features,
+                measured_features=measured,
+                # A live scan has no ground truth; the security score is not a traffic label.
                 ground_truth={
-                    "traffic_class": "benign" if report.security_score >= 80 else "malicious",
-                    "scenario_id": f"live_scan_{report.hostname}",
-                    "attack_type": "none" if report.security_score >= 80 else "vulnerable_endpoint",
+                    "traffic_class": "unlabeled",
+                    "scenario_id": "live_scan",
+                    "attack_type": None,
+                    "security_score": report.security_score,
                 },
-                metadata_untrusted=report.metadata_untrusted,
+                metadata_untrusted=untrusted,
             )
-            logger.info("Successfully ingested real digital twin flow %s into %s", flow_id, TWIN_DB_PATH)
+            logger.info("Recorded live scan %s in %s", flow_id, LIVE_SCAN_DB_PATH)
         except Exception as exc:
-            logger.warning("Could not ingest into twin database: %s", exc)
+            logger.warning("Could not record live scan: %s", exc)

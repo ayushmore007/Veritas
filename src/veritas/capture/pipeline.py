@@ -13,7 +13,8 @@ from veritas.capture.config import load_capture_config, resolve_project_path
 from veritas.capture.join_labels import (
     dedupe_labels,
     label_to_ground_truth,
-    match_labels_to_flows,
+    match_labels_to_flows_scored,
+    summarize_match_quality,
 )
 from veritas.capture.metadata import (
     build_port_sni_map,
@@ -84,7 +85,8 @@ class CapturePipeline:
             use_latest_run=bool(label_cfg.get("use_latest_run", False)),
             latest_run_count=int(label_cfg.get("latest_run_count", 5)),
         )
-        pairs = match_labels_to_flows(labels, flows)
+        scored_pairs = match_labels_to_flows_scored(labels, flows)
+        pairs = [(label, row) for label, row, _ in scored_pairs]
 
         # 4) Build enriched records with trust tags
         records: list[EnrichedFlowRecord] = []
@@ -142,6 +144,7 @@ class CapturePipeline:
             "matched_count": len(records),
             "unmatched_labels": unmatched_labels,
             "unmatched_flows": unmatched_flows,
+            "match_quality": summarize_match_quality(scored_pairs),
             "trust_summary": {
                 "trusted_fields": sum(
                     1 for r in records for t in r.field_trust.values() if t == "trusted"

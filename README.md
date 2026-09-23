@@ -53,9 +53,12 @@ Mininet is Linux-native. Use **WSL2 (Ubuntu)** or **Docker** for Phases 1+ testb
 Launch the interactive **Veritas Sentinel Security Dashboard**:
 
 ```bash
-python web/server.py
+python web/server.py            # listens on 127.0.0.1:8000
 ```
-*(Or open [`web/index.html`](file:///d:/Veritas/web/index.html) directly in your browser)*
+
+The scanner probes whatever host you give it, so the server binds to loopback and rejects
+cross-origin API calls. Use `--host` only on a network you control. Live scans are recorded in
+`data/processed/twin/live_scans.db`, never in the research twin (`twin.db`).
 
 - **Server Identification**: Inspect target nodes (`cdn-edge-3`, `api-sync-7`, `backup-01`, or custom endpoints).
 - **Security Test Battery**: 7 in-depth tests (QUIC handshake, C2 beaconing, Exfiltration entropy, Metadata prompt injection, ML evasion, Twin replay).

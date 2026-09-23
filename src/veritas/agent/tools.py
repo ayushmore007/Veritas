@@ -157,6 +157,7 @@ class AgentToolbox:
             raise
 
         features = behavioural_features(raw["features"])
+        shown = {name: _round(features[name]) for name in self.feature_fields if name in features}
         payload = {
             "flow_id": flow_id,
             "trust_level": TrustLevel.MEASURED.value,
@@ -164,10 +165,8 @@ class AgentToolbox:
             # via get_host_history without being handed dst_port, which in this testbed *is* the
             # label. See veritas/features.py.
             "peer_ref": host_ref(raw["five_tuple"]["dst_ip"]),
-            "features": {
-                name: _round(features[name]) for name in self.feature_fields if name in features
-            },
-            "features_omitted": max(0, len(features) - len(self.feature_fields)),
+            "features": shown,
+            "features_omitted": len(features) - len(shown),
         }
         self._assert_no_identity(payload["features"])
         self._assert_no_ground_truth(payload)
@@ -217,7 +216,12 @@ class AgentToolbox:
         Accepts a `peer_ref` from `get_flow_stats`. A raw IP is also accepted so the twin CLI and
         the verifier can call the same code path, but the agent is never given one.
         """
-        ip = peer_ref if not peer_ref.startswith("host-") else self.resolve_peer_ref(peer_ref)
+        arguments = {"peer_ref": peer_ref, "limit": limit}
+        try:
+            ip = peer_ref if not peer_ref.startswith("host-") else self.resolve_peer_ref(peer_ref)
+        except KeyError as exc:
+            self._record("get_host_history", arguments, TrustLevel.MEASURED, None, str(exc))
+            raise
         raw = _twin_host_history(self.store, ip, limit=limit)
         events = []
         for event in raw["events"]:
@@ -238,9 +242,7 @@ class AgentToolbox:
         for event in events:
             self._assert_no_ground_truth(event)
             self._assert_no_identity(event)
-        self._record(
-            "get_host_history", {"peer_ref": peer_ref, "limit": limit}, TrustLevel.MEASURED, payload
-        )
+        self._record("get_host_history", arguments, TrustLevel.MEASURED, payload)
         return payload
 
     # -- helpers ----------------------------------------------------------

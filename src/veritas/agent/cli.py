@@ -62,6 +62,10 @@ def _cmd_triage(args: argparse.Namespace) -> int:
         print("No flows in the twin. Run `veritas-twin ingest` first.")
         return 1
 
+    if args.flow_id and not args.all and store.get_flow(args.flow_id) is None:
+        print(f"Unknown flow_id: {args.flow_id}")
+        return 1
+
     results = []
     for flow_id in flow_ids:
         trace = agent.triage(flow_id)
@@ -124,7 +128,10 @@ def _cmd_split(args: argparse.Namespace) -> int:
     manifest.data = make_splits(flows, seed=args.seed)
     manifest.save()
 
-    by_class: dict[str, dict[str, int]] = {}
+    # Seed both classes so a split missing one entirely is judged on a zero, not on the other class.
+    by_class: dict[str, dict[str, int]] = {
+        name: {"benign": 0, "malicious": 0} for name in ("train", "val", "test")
+    }
     for flow in flows:
         split = manifest.split_of(flow["flow_id"]) or "?"
         bucket = by_class.setdefault(split, {})

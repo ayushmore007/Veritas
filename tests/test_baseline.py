@@ -32,6 +32,12 @@ def _fake_record(flow_id: str, traffic_class: str, pkt: float) -> EnrichedFlowRe
             "scenario_id": f"s_{flow_id}",
         },
         metadata={"sni": "example.com", "alpn": "h3"},
+        field_trust={"sni": "untrusted", "alpn": "untrusted"},
+        src_ip="127.0.0.1",
+        dst_ip="127.0.0.1",
+        src_port=50000,
+        dst_port=4433 if traffic_class == "benign" else 4434,
+        protocol=17,
     )
 
 

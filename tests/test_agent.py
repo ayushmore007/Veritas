@@ -341,6 +341,29 @@ def test_repeated_identical_tool_call_does_not_loop_forever(store: TwinStore):
     assert trace.parse_error == "step_budget_exhausted_without_verdict"
 
 
+def test_re_requesting_the_seeded_flow_stats_is_deduplicated(store: TwinStore):
+    """The seeded observation and `{}` / `{"flow_id": <same>}` are one call, not three."""
+    provider = _RawProvider(
+        json.dumps({"action": "call_tool", "tool": "get_flow_stats", "arguments": {}})
+    )
+    trace = _agent(store, provider=provider, max_steps=3).triage(FLOW_IDS["browse"])
+    assert [c.tool for c in trace.tool_calls] == ["get_flow_stats"]
+
+
+def test_malformed_tool_arguments_become_an_observation_not_a_crash(store: TwinStore):
+    provider = _RawProvider(
+        json.dumps(
+            {
+                "action": "call_tool",
+                "tool": "get_host_history",
+                "arguments": {"peer_ref": "127.0.0.2", "limit": None},
+            }
+        )
+    )
+    trace = _agent(store, provider=provider, max_steps=2).triage(FLOW_IDS["browse"])
+    assert trace.decision.verdict is Verdict.FLAG
+
+
 def test_trace_registry_roundtrip(store: TwinStore, tmp_path: Path):
     registry = TraceRegistry(tmp_path / "traces.jsonl")
     registry.append(_agent(store).triage(FLOW_IDS["browse"]))

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from veritas.baselines.compare import compare_agent_vs_ml
-from veritas.baselines.config import load_baseline_config
+from veritas.baselines.config import load_baseline_config, resolve_project_path
 from veritas.baselines.dataset import load_dataset, xy_from_frame
 from veritas.baselines.explain import explain_with_lime, explain_with_shap
 from veritas.baselines.metrics import score_predictions
@@ -18,15 +18,15 @@ from veritas.eval.splits import SplitManifest, make_splits
 
 def _paths(cfg: dict) -> dict[str, Path]:
     out = cfg["output"]
-    model_dir = Path(out["model_dir"])
+    model_dir = resolve_project_path(out["model_dir"])
     return {
-        "features": Path(cfg["data"]["features_file"]),
-        "split": Path(cfg["data"]["split_manifest"]),
+        "features": resolve_project_path(cfg["data"]["features_file"]),
+        "split": resolve_project_path(cfg["data"]["split_manifest"]),
         "model": model_dir / out["model_file"],
         "metrics": model_dir / out["metrics_file"],
         "explanations": model_dir / out["explanations_file"],
         "predictions": model_dir / out["predictions_file"],
-        "traces": Path(cfg["comparison"]["agent_traces"]),
+        "traces": resolve_project_path(cfg["comparison"]["agent_traces"]),
     }
 
 
@@ -38,19 +38,24 @@ def cmd_ensure_split(args: argparse.Namespace) -> int:
         return 0
 
     df, _ = load_dataset(paths["features"])
+    if df.empty:
+        print(f"ERROR: no flows in {paths['features']}.", file=sys.stderr)
+        return 1
     flows = [
         {
             "flow_id": row["flow_id"],
             "traffic_class": "malicious" if row["label"] == 1 else "benign",
             "scenario_id": row.get("scenario_id"),
-            "capture_id": "phase1",
+            # Group by real capture so no capture straddles train/test (see eval/splits.py).
+            "capture_id": row.get("capture_id"),
         }
         for _, row in df.iterrows()
     ]
-    manifest = make_splits(flows, seed=args.seed)
-    SplitManifest(paths["split"]).data = manifest
-    SplitManifest(paths["split"]).save()
-    print(json.dumps(manifest, indent=2))
+    manifest = SplitManifest(paths["split"])
+    manifest.data = make_splits(flows, seed=args.seed)
+    manifest.save()
+    print(json.dumps({k: v for k, v in manifest.data.items() if k != "assignment"}, indent=2))
+    print(f"Written to: {manifest.path}")
     return 0
 
 
@@ -59,7 +64,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     paths = _paths(cfg)
 
     if not paths["split"].is_file():
-        cmd_ensure_split(argparse.Namespace(config=args.config, force=False, seed=0))
+        rc = cmd_ensure_split(argparse.Namespace(config=args.config, force=False, seed=0))
+        if rc != 0:
+            return rc
 
     df, feature_cols = load_dataset(paths["features"], split_manifest=paths["split"], split="train")
     if len(df) < cfg["features"]["min_train_samples"]:
@@ -171,7 +178,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
     paths = _paths(cfg)
 
     if not paths["predictions"].is_file():
-        cmd_predict(argparse.Namespace(config=args.config, split="test"))
+        rc = cmd_predict(argparse.Namespace(config=args.config, split="test"))
+        if rc != 0:
+            return rc
 
     preds = [
         json.loads(line)

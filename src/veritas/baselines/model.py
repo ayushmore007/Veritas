@@ -88,7 +88,8 @@ def predict_frame(model: BaselineClassifier, df, feature_cols: list[str]) -> lis
     preds = model.predict(x)
     probas = model.predict_proba(x)
     out: list[dict[str, Any]] = []
-    for i, row in df.iterrows():
+    # Positional index: `df` may be a filtered view whose index labels are not 0..n-1.
+    for i, (_, row) in enumerate(df.iterrows()):
         mal_prob = float(probas[i, 1]) if probas.shape[1] > 1 else float(preds[i])
         out.append(
             {

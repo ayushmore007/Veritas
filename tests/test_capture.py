@@ -68,3 +68,26 @@ def test_extract_flows_from_minimal_pcap(tmp_path: Path):
     flows = extract_flows_from_pcap(pcap)
     assert len(flows) >= 1
     assert flows[0]["dst_port"] in (4433, 40000)
+
+
+def test_extracted_time_fields_are_in_seconds(tmp_path: Path):
+    """CICFlowMeter emits microseconds; the project reasons in seconds everywhere downstream."""
+    pytest = __import__("pytest")
+    pytest.importorskip("scapy")
+    from scapy.all import IP, UDP, Ether, wrpcap
+
+    from veritas.capture.cicflowmeter_extract import extract_flows_from_pcap
+
+    pkts = []
+    for i, t in enumerate((1000.0, 1001.5, 1003.0)):
+        sport, dport = (40000, 4433) if i % 2 == 0 else (4433, 40000)
+        pkt = Ether() / IP(src="127.0.0.1", dst="127.0.0.1") / UDP(sport=sport, dport=dport) / b"x"
+        pkt.time = t
+        pkts.append(pkt)
+    pcap = tmp_path / "timed.pcap"
+    wrpcap(str(pcap), pkts)
+
+    flow = extract_flows_from_pcap(pcap)[0]
+    assert abs(flow["flow_duration"] - 3.0) < 1e-6
+    assert abs(flow["flow_iat_max"] - 1.5) < 1e-6
+    assert flow["flow_pkts_s"] > 0.5  # rates stay per-second, not rescaled

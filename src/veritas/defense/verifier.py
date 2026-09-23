@@ -141,5 +141,16 @@ class ProvenanceVerifier:
                 replay=replay_info,
             )
 
+        # A decisive claim the twin contradicts cannot be the basis for clearing a flow. Only
+        # reachable with the twin anchor: without it every measured claim is `unsupported`, which
+        # is exactly what the use_twin=False ablation is meant to show.
+        contradicted = [
+            cv
+            for cv in claim_verdicts
+            if cv.claim.decisive and cv.status is ClaimStatus.CONTRADICTED
+        ]
+        if contradicted:
+            return VerificationResult(True, Verdict.FLAG, claim_verdicts, replay=replay_info)
+
         # Role confusion: decisive claims labelled measured but replay not run — allow for demo.
         return VerificationResult(False, decision.verdict, claim_verdicts, replay=replay_info)

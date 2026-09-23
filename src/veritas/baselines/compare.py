@@ -43,8 +43,8 @@ def compare_agent_vs_ml(
             agent_detected = agent_verdict in ("block", "flag")
             agent_claims = [
                 {
-                    "text": c.text[:200],
-                    "evidence_type": c.evidence_type,
+                    "text": c.statement[:200],
+                    "evidence_source": c.evidence_source.value,
                     "groundable": c.is_groundable(),
                 }
                 for c in trace.decision.decisive_claims()[:5]

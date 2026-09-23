@@ -80,6 +80,23 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit(args: argparse.Namespace) -> int:
+    from veritas.testbed.audit import audit_labels
+
+    cfg = load_testbed_config(Path(args.config) if args.config else None)
+    labels_path = (
+        Path(args.labels)
+        if args.labels
+        else resolve_path(cfg["output"]["labels_dir"], cfg) / "flows.jsonl"
+    )
+    labels = LabelRegistry(labels_path).load_all()
+    if not labels:
+        print(f"No labels in {labels_path}. Run `veritas-testbed generate` first.")
+        return 1
+    print(json.dumps(audit_labels(labels, sample=args.sample, seed=args.seed), indent=2, default=str))
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Veritas Phase 1 — QUIC testbed traffic generation (lab only)",
@@ -107,6 +124,12 @@ def main() -> None:
     summ = sub.add_parser("summary", help="Summarize an existing flows.jsonl")
     summ.add_argument("--labels", required=True, help="Path to flows.jsonl")
     summ.set_defaults(func=_cmd_summary)
+
+    audit = sub.add_parser("audit", help="Check that labels match the generated behaviour")
+    audit.add_argument("--labels", help="Path to flows.jsonl (default from testbed.yaml)")
+    audit.add_argument("--sample", type=int, help="Audit a random sample of N labels")
+    audit.add_argument("--seed", type=int, default=0)
+    audit.set_defaults(func=_cmd_audit)
 
     serve = sub.add_parser("serve", help="Run a single HTTP/3 server (debug)")
     serve.add_argument(

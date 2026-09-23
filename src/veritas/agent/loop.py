@@ -144,6 +144,18 @@ class DefenderAgent:
             return self.toolbox.get_host_history(str(ref), limit=int(arguments.get("limit", 20)))
         raise ValueError(f"Unknown tool: {tool!r}")
 
+    @staticmethod
+    def _call_key(tool: str, arguments: dict[str, Any], flow_id: str) -> tuple[str, str]:
+        """Identity of a tool call for de-duplication, with the flow_id default filled in.
+
+        `{}` and `{"flow_id": <this flow>}` are the same call to get_flow_stats/get_metadata, and
+        must collide — including with the seeded get_flow_stats observation.
+        """
+        args = dict(arguments)
+        if tool in ("get_flow_stats", "get_metadata"):
+            args = {"flow_id": str(args.get("flow_id") or flow_id)}
+        return tool, json.dumps(args, sort_keys=True, default=str)
+
     # -- main loop --------------------------------------------------------
 
     def triage(self, flow_id: str) -> ReasoningTrace:
@@ -161,7 +173,7 @@ class DefenderAgent:
             observations.append(
                 {"tool": "get_flow_stats", "payload": self.toolbox.get_flow_stats(flow_id)}
             )
-            seen_calls.add(("get_flow_stats", flow_id))
+            seen_calls.add(self._call_key("get_flow_stats", {}, flow_id))
 
         for step in range(1, self.max_steps + 1):
             user = build_observation_prompt(
@@ -202,7 +214,7 @@ class DefenderAgent:
                 arguments = parsed.get("arguments") or {}
                 if not isinstance(arguments, dict):
                     arguments = {}
-                key = (tool, json.dumps(arguments, sort_keys=True, default=str))
+                key = self._call_key(tool, arguments, flow_id)
                 if key in seen_calls:
                     # Repeating an identical call cannot add evidence; force a decision instead of
                     # burning the step budget in a loop.
@@ -219,7 +231,7 @@ class DefenderAgent:
                 seen_calls.add(key)
                 try:
                     payload = self._dispatch(tool, arguments, flow_id)
-                except (ValueError, KeyError) as exc:
+                except (ValueError, KeyError, TypeError) as exc:
                     payload = {"trust_level": TrustLevel.MEASURED.value, "error": str(exc)}
                 observations.append({"tool": tool, "payload": payload})
                 continue

@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
-REPORT_PATH = Path("data/processed/eval/phase9_report.json")
-FIGURES_DIR = Path("data/processed/eval/figures")
+from veritas.testbed.config import project_root
+
+# Anchored at the project root so the CLI works from any working directory.
+REPORT_PATH = project_root() / "data/processed/eval/phase9_report.json"
+FIGURES_DIR = project_root() / "data/processed/eval/figures"
 
 
 def _eval_modules_ready() -> bool:

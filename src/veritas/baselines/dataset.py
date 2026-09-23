@@ -12,6 +12,11 @@ from veritas.capture.records import EnrichedFlowRecord, EnrichedFlowRegistry
 from veritas.eval.splits import SplitManifest
 from veritas.features import behavioural_features
 
+#: Bookkeeping and label columns in the modelling frame. Everything else is a feature.
+NON_FEATURE_COLUMNS: frozenset[str] = frozenset(
+    {"flow_id", "capture_id", "scenario_id", "traffic_class", "attack_type", "label"}
+)
+
 
 def _label_binary(record: EnrichedFlowRecord) -> int:
     """1 = malicious, 0 = benign."""
@@ -29,6 +34,7 @@ def records_to_frame(records: list[EnrichedFlowRecord]) -> pd.DataFrame:
         measured = behavioural_features(rec.cicflowmeter)
         row = {k: v for k, v in measured.items() if isinstance(v, (int, float))}
         row["flow_id"] = rec.flow_id
+        row["capture_id"] = rec.capture_id
         row["scenario_id"] = rec.ground_truth.get("scenario_id")
         row["traffic_class"] = rec.ground_truth.get("traffic_class")
         row["attack_type"] = _label_attack_type(rec)
@@ -50,13 +56,15 @@ def load_dataset(
     if df.empty:
         return df, []
 
-    feature_cols = [
-        c
-        for c in df.columns
-        if c not in {"flow_id", "scenario_id", "traffic_class", "attack_type", "label"}
-    ]
+    feature_cols = [c for c in df.columns if c not in NON_FEATURE_COLUMNS]
 
-    if split and split_manifest and split_manifest.is_file():
+    if split:
+        # Silently falling back to the full dataset would score the model on its training data.
+        if split_manifest is None or not split_manifest.is_file():
+            raise FileNotFoundError(
+                f"Split {split!r} requested but no split manifest at {split_manifest}. "
+                "Run `veritas-agent split` or `veritas-baseline ensure-split` first."
+            )
         manifest = SplitManifest(split_manifest)
         allowed = set(manifest.flow_ids(split))
         df = df[df["flow_id"].isin(allowed)].reset_index(drop=True)
