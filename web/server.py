@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from web.scanner import LIVE_SCAN_DB_PATH, LiveSecurityScanner
+from web.scanner import LIVE_SCAN_DB_PATH, LiveSecurityScanner  # noqa: E402 (needs sys.path above)
 
 WEB_DIR = ROOT / "web"
 CONFIG_FILE = ROOT / "config" / "testbed.yaml"
@@ -242,6 +242,10 @@ class VeritasDashboardHandler(http.server.SimpleHTTPRequestHandler):
 
         report_dict = self._serialize_report(report)
         with _STATE_LOCK:
+            # Only engine-side controls are known to be active; server-side fixes need a probe.
+            report_dict["applied_preventions"] = sorted(
+                key for key in ACTIVE_PREVENTIONS if key == "provenance_grounding_verifier"
+            )
             SCAN_CACHE[target] = report_dict
         record_scan(report_dict)
         self._send_json({"success": True, "report": report_dict})

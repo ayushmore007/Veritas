@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import random
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from veritas.testbed.certs import ensure_testbed_certs
 from veritas.testbed.client import HttpSession
@@ -15,6 +18,48 @@ from veritas.testbed.scenarios import benign, malicious
 from veritas.testbed.server import TestbedServer
 
 logger = logging.getLogger(__name__)
+
+
+#: Probe paths a scan run draws from when parameters are varied per run.
+_SCAN_PATH_POOL = [
+    "/", "/admin", "/api", "/.env", "/login", "/.git/HEAD", "/config.json", "/wp-admin",
+    "/server-status", "/backup.zip",
+]
+
+
+def vary_scenarios(scenarios: dict[str, Any], rng: random.Random) -> dict[str, Any]:
+    """
+    Per-run parameter draw around the configured scenario values.
+
+    Identical runs would give identical flows, and a model would learn the generator's constants
+    rather than the behaviour. Each draw stays inside the behaviour the label claims — a beacon is
+    still long and periodic, an exfil still upload-heavy — so `veritas-testbed audit` should pass.
+    """
+    out = copy.deepcopy(scenarios)
+    browse, stream = out["benign"][0], out["benign"][1]
+    browse["repetitions"] = rng.randint(3, 8)
+    stream["repetitions"] = rng.randint(1, 3)
+    stream["chunk_kb"] = rng.choice([128, 192, 256, 384, 512])
+
+    by_id = {s["id"]: s for s in out["malicious"]}
+    c2 = by_id["c2_beacon"]
+    c2["interval_sec"] = round(rng.uniform(1.5, 3.0), 3)
+    c2["repetitions"] = rng.randint(5, 9)
+    by_id["data_exfil"]["upload_kb"] = rng.randint(256, 1024)
+    by_id["scan_probe"]["paths"] = rng.sample(_SCAN_PATH_POOL, rng.randint(4, 8))
+    return out
+
+
+class _RunTaggingRegistry:
+    """Label registry wrapper that stamps every appended record with the current run_id."""
+
+    def __init__(self, inner: LabelRegistry, run_id: str | None) -> None:
+        self.inner = inner
+        self.run_id = run_id
+
+    def append(self, record: FlowLabelRecord) -> FlowLabelRecord:
+        record.run_id = self.run_id
+        return self.inner.append(record)
 
 
 class LabOrchestrator:
@@ -60,10 +105,17 @@ class LabOrchestrator:
         for s in servers:
             await s.stop()
 
-    async def run_all_scenarios(self, *, ca_path: Path) -> list[FlowLabelRecord]:
+    async def run_all_scenarios(
+        self,
+        *,
+        ca_path: Path,
+        scenario_cfg: dict[str, Any] | None = None,
+        registry: LabelRegistry | _RunTaggingRegistry | None = None,
+    ) -> list[FlowLabelRecord]:
         records: list[FlowLabelRecord] = []
         hosts = self.config["hosts"]
-        scenario_cfg = self.config["scenarios"]
+        scenario_cfg = scenario_cfg or self.config["scenarios"]
+        registry = registry or self.registry
 
         benign_host = hosts["benign_server"]
         browse_cfg = scenario_cfg["benign"][0]
@@ -78,7 +130,7 @@ class LabOrchestrator:
                     session,
                     dst_host="benign_server",
                     repetitions=browse_cfg["repetitions"],
-                    registry=self.registry,
+                    registry=registry,
                 )
             )
         stream_cfg = scenario_cfg["benign"][1]
@@ -94,7 +146,7 @@ class LabOrchestrator:
                     dst_host="benign_server",
                     chunk_kb=stream_cfg["chunk_kb"],
                     repetitions=stream_cfg["repetitions"],
-                    registry=self.registry,
+                    registry=registry,
                 )
             )
 
@@ -112,7 +164,7 @@ class LabOrchestrator:
                     dst_host="malicious_c2",
                     interval_sec=c2_cfg["interval_sec"],
                     repetitions=c2_cfg["repetitions"],
-                    registry=self.registry,
+                    registry=registry,
                 )
             )
         scan_cfg = next(s for s in scenario_cfg["malicious"] if s["id"] == "scan_probe")
@@ -127,7 +179,7 @@ class LabOrchestrator:
                     session,
                     dst_host="malicious_c2",
                     paths=scan_cfg["paths"],
-                    registry=self.registry,
+                    registry=registry,
                 )
             )
 
@@ -144,26 +196,41 @@ class LabOrchestrator:
                     session,
                     dst_host="malicious_exfil",
                     upload_kb=exfil_cfg["upload_kb"],
-                    registry=self.registry,
+                    registry=registry,
                 )
             )
 
         return records
 
-    async def run(self) -> dict:
+    async def run(self, *, run_id: str | None = None, seed: int | None = None) -> dict:
+        """
+        One generation run. With a `seed`, scenario parameters are drawn per run (see
+        `vary_scenarios`); without one the configured values are used verbatim.
+        """
         cert, key = self.ensure_certs()
         ca_path = self.certs_dir / "ca.crt"
+        scenario_cfg = self.config["scenarios"]
+        if seed is not None:
+            scenario_cfg = vary_scenarios(scenario_cfg, random.Random(seed))
+
         servers = await self.start_servers(cert, key)
         try:
             await asyncio.sleep(0.3)
-            records = await self.run_all_scenarios(ca_path=ca_path)
+            records = await self.run_all_scenarios(
+                ca_path=ca_path,
+                scenario_cfg=scenario_cfg,
+                registry=_RunTaggingRegistry(self.registry, run_id),
+            )
         finally:
             await self.stop_servers(servers)
 
         summary = LabelRegistry.summarize(records)
         return {
+            "run_id": run_id,
+            "seed": seed,
             "labels_file": str(self.labels_path),
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scenario_params": scenario_cfg,
             "summary": summary,
             "records": [r.model_dump(mode="json") for r in records],
         }

@@ -17,8 +17,13 @@ def dedupe_labels(
     latest_run_count: int = 5,
 ) -> list[FlowLabelRecord]:
     """Reduce duplicate labels from repeated `veritas-testbed generate` runs."""
-    if use_latest_run and len(labels) > latest_run_count:
-        labels = labels[-latest_run_count:]
+    if use_latest_run and labels:
+        latest_run = labels[-1].run_id
+        if latest_run is not None:
+            labels = [label for label in labels if label.run_id == latest_run]
+        elif len(labels) > latest_run_count:
+            # Labels written before run_id existed: fall back to "the last N lines".
+            labels = labels[-latest_run_count:]
     if strategy == "none":
         return labels
     if strategy != "last_per_scenario_port":
@@ -42,7 +47,7 @@ def _server_port(row: dict) -> int:
     return dp
 
 
-def _flow_timestamp(row: dict) -> float:
+def flow_timestamp(row: dict) -> float:
     ts = row.get("timestamp")
     if ts is None:
         return 0.0
@@ -152,14 +157,14 @@ def match_labels_to_flows_scored(
     scored: list[tuple[FlowLabelRecord, dict, dict[str, Any]]] = []
     for port in sorted(by_port_labels):
         port_labels = sorted(by_port_labels[port], key=lambda r: r.started_at)
-        port_flows = sorted(by_port_flows.get(port, []), key=_flow_timestamp)
+        port_flows = sorted(by_port_flows.get(port, []), key=flow_timestamp)
         if not port_flows:
             continue
 
         label_t0 = port_labels[0].started_at.timestamp()
-        flow_t0 = _flow_timestamp(port_flows[0])
+        flow_t0 = flow_timestamp(port_flows[0])
         label_offsets = [lbl.started_at.timestamp() - label_t0 for lbl in port_labels]
-        flow_offsets = [_flow_timestamp(r) - flow_t0 for r in port_flows]
+        flow_offsets = [flow_timestamp(r) - flow_t0 for r in port_flows]
         offset_scale = max(1.0, *label_offsets, *flow_offsets)
 
         infos = [

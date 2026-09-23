@@ -203,8 +203,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("train", help="Train sklearn baseline on train split")
 
-    p_pred = sub.add_parser("predict", help="Predict on a split")
-    p_pred.add_argument("--split", choices=["train", "val", "test"], default="test")
+    for name, help_text in (
+        ("predict", "Predict on a split and score it"),
+        ("evaluate", "Alias of predict: score the model on a split"),
+    ):
+        p_pred = sub.add_parser(name, help=help_text)
+        p_pred.add_argument("--split", choices=["train", "val", "test"], default="test")
 
     p_exp = sub.add_parser("explain", help="SHAP/LIME attributions")
     p_exp.add_argument("--split", choices=["train", "val", "test"], default="test")
@@ -217,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         "ensure-split": cmd_ensure_split,
         "train": cmd_train,
         "predict": cmd_predict,
+        "evaluate": cmd_predict,
         "explain": cmd_explain,
         "compare": cmd_compare,
     }

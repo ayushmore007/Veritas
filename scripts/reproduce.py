@@ -10,6 +10,7 @@ Examples::
     python scripts/reproduce.py --quick
     python scripts/reproduce.py --provider ollama
     python scripts/reproduce.py --skip-generate
+    python scripts/reproduce.py --runs 60 --seed 1 --entropy   # multi-capture corpus
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SPLIT_PATH = ROOT / "data/processed/splits/split.json"
 FEATURES_PATH = ROOT / "data/processed/features/flows_features.jsonl"
+REPORT_PATH = ROOT / "data/processed/eval/phase9_report.json"
 
 
 def _current_flow_ids() -> set[str]:
@@ -64,13 +66,21 @@ def run_pipeline(args: argparse.Namespace) -> int:
     agent = _agent_flags(provider)
 
     if not args.skip_generate:
-        _run("Phase 1 — testbed", ["-m", "veritas.testbed.cli", "generate", "--record-pcap"])
+        gen_argv = ["-m", "veritas.testbed.cli", "generate", "--record-pcap", "--runs", str(args.runs)]
+        if args.seed is not None:
+            gen_argv += ["--seed", str(args.seed)]
+        _run("Phase 1 — testbed", gen_argv)
         # Re-capture assigns new flow_ids; split must be rebuilt before any held-out scoring.
         args.force_split = True
     else:
         print("\n[Phase 1] skipped (--skip-generate)")
 
-    _run("Phase 2 — capture", ["-m", "veritas.capture.cli", "process"])
+    capture_argv = ["-m", "veritas.capture.cli", "process"]
+    if args.runs > 1 or args.manifest:
+        capture_argv.append("--manifest")
+    if args.entropy:
+        capture_argv.append("--entropy")
+    _run("Phase 2 — capture", capture_argv)
 
     _run("Phase 3 — twin ingest", ["-m", "veritas.twin.cli", "ingest"])
 
@@ -105,21 +115,29 @@ def run_pipeline(args: argparse.Namespace) -> int:
     eval_argv = ["-m", "veritas.eval.cli", "--provider", provider, "run"]
     if args.require_live_eval:
         eval_argv.append("--require-live")
-    _run("Phase 9 — evaluation", eval_argv)
-
-    if not args.quick:
-        _run(
-            "Phase 10 — figures",
-            ["-m", "veritas.eval.cli", "--provider", provider, "figures"],
+    if REPORT_PATH.is_file() or args.require_live_eval:
+        _run("Phase 9 — evaluation", eval_argv)
+        if not args.quick:
+            _run(
+                "Phase 10 — figures",
+                ["-m", "veritas.eval.cli", "--provider", provider, "figures"],
+            )
+    else:
+        # data/ is gitignored, so a fresh clone never has the saved report. That is a missing
+        # artifact, not a pipeline failure — say so instead of exiting non-zero after Phase 5.
+        print(
+            f"\n[Phase 9] skipped: no saved report at {REPORT_PATH}. Live Phase 6–8 experiments "
+            "are not in this repository yet; place a full-corpus phase9_report.json there, or "
+            "pass --require-live-eval to make this a hard failure."
         )
 
     print("\nReproduction finished.")
     print(f"  Agent provider: {provider}")
-    print(f"  Phase 9 report: {ROOT / 'data/processed/eval/phase9_report.json'}")
+    print(f"  Phase 9 report: {REPORT_PATH}")
     if args.quick:
         print(
-            "\nNOTE: --quick is a smoke run (~5 flows). Paper numbers require the full corpus "
-            "and a real LLM (--provider ollama). Multi-run testbed generation is not wired yet."
+            "\nNOTE: --quick is a smoke run. Paper numbers require the full corpus "
+            "(e.g. --runs 60 --seed 1 --entropy) and a real LLM (--provider ollama)."
         )
     if provider == "deterministic":
         print(
@@ -148,6 +166,27 @@ def main() -> int:
         "--skip-generate",
         action="store_true",
         help="Reuse existing Phase 1 labels/PCAP (run capture onward)",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Testbed generation runs; each is its own capture (default: 1)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Vary scenario parameters per run, reproducibly",
+    )
+    parser.add_argument(
+        "--manifest",
+        action="store_true",
+        help="With --skip-generate: re-process every run in runs_manifest.json",
+    )
+    parser.add_argument(
+        "--entropy",
+        action="store_true",
+        help="Add Phase 8c packet-level entropy features during capture",
     )
     parser.add_argument(
         "--force-split",

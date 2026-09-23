@@ -7,46 +7,115 @@ import asyncio
 import json
 import logging
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from veritas.capture.pcap_record import PcapRecorder
 from veritas.testbed.config import load_testbed_config, project_root, resolve_path
-from veritas.testbed.labels import LabelRegistry
+from veritas.testbed.labels import FlowLabelRecord, LabelRegistry
 from veritas.testbed.orchestrator import LabOrchestrator
 from veritas.testbed.server import run_server_process
+
+
+#: Written next to the PCAPs; `veritas-capture process --manifest` reads it.
+RUNS_MANIFEST_NAME = "runs_manifest.json"
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     orch = LabOrchestrator(Path(args.config) if args.config else None)
     cfg = load_testbed_config(Path(args.config) if args.config else None)
     ports = [h["port"] for h in cfg["hosts"].values() if h.get("role") == "server"]
+    pcaps_dir = resolve_path(cfg["output"]["pcaps_dir"], cfg)
 
-    recorder = None
-    pcap_out: Path | None = Path(args.pcap_out) if args.pcap_out else None
+    if args.runs < 1:
+        print("--runs must be at least 1", file=sys.stderr)
+        return 2
+    if args.pcap_out and args.runs > 1:
+        print("--pcap-out names one file; it cannot be used with --runs > 1", file=sys.stderr)
+        return 2
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    manifest_runs: list[dict] = []
+    results: list[dict] = []
+
+    for i in range(args.runs):
+        run_id = f"{stamp}-r{i:03d}"
+        # Distinct, reproducible draw per run; None keeps the configured values verbatim.
+        run_seed = None if args.seed is None else args.seed * 100_003 + i
+
+        recorder = None
+        pcap_out: Path | None = None
+        if args.record_pcap:
+            if args.pcap_out:
+                pcap_out = Path(args.pcap_out)
+            elif args.runs == 1:
+                pcap_out = pcaps_dir / "phase1.pcapng"
+            else:
+                pcap_out = pcaps_dir / f"run_{run_id}.pcapng"
+            recorder = PcapRecorder(pcap_out, ports)
+            recorder.start()
+            time.sleep(1.5)  # let the capture attach before the first QUIC packets
+
+        result: dict = {}
+        try:
+            result = asyncio.run(orch.run(run_id=run_id, seed=run_seed))
+        finally:
+            if recorder is not None and pcap_out is not None:
+                result["pcap_file"] = str(pcap_out)
+                result["pcap_packets"] = recorder.stop()
+
+        results.append(result)
+        manifest_runs.append(
+            {
+                "run_id": run_id,
+                "seed": run_seed,
+                "pcap": result.get("pcap_file"),
+                "pcap_packets": result.get("pcap_packets"),
+                "flow_ids": [r["flow_id"] for r in result.get("records", [])],
+                "scenario_params": result.get("scenario_params"),
+            }
+        )
+        print(
+            f"[run {i + 1}/{args.runs}] {run_id}: {result['summary']['total']} flows"
+            + (f", {result.get('pcap_packets', 0)} packets" if recorder else ""),
+            file=sys.stderr,
+        )
+
+    manifest_path = pcaps_dir / RUNS_MANIFEST_NAME
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "seed": args.seed,
+                "runs": manifest_runs,
+                "labels_file": results[-1]["labels_file"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    if args.runs == 1:
+        print(json.dumps(results[0], indent=2))
+    else:
+        totals = LabelRegistry.summarize(
+            [FlowLabelRecord.model_validate(r) for res in results for r in res["records"]]
+        )
+        print(json.dumps({"runs": args.runs, "seed": args.seed, "summary": totals}, indent=2))
+
+    print(f"\nGround-truth labels written to: {results[-1]['labels_file']}")
+    print(f"Run manifest: {manifest_path}")
     if args.record_pcap:
-        pcap_out = pcap_out or resolve_path(cfg["output"]["pcaps_dir"], cfg) / "phase1.pcapng"
-        recorder = PcapRecorder(pcap_out, ports)
-        recorder.start()
-        import time
-
-        time.sleep(1.5)  # let tshark attach before first QUIC packets
-
-    result: dict = {}
-    try:
-        result = asyncio.run(orch.run())
-    finally:
-        if recorder is not None and pcap_out is not None:
-            result["pcap_file"] = str(pcap_out)
-            result["pcap_packets"] = recorder.stop()
-
-    print(json.dumps(result, indent=2))
-    print(f"\nGround-truth labels written to: {result['labels_file']}")
-    if recorder is not None:
-        print(f"PCAP recording: {result.get('pcap_file')} ({result.get('pcap_packets', 0)} packets)")
-        if result.get("pcap_packets", 0) == 0:
-            print("Hint: If 0 packets, use tshark on loopback or install Npcap for scapy sniff.")
+        empty = [r["run_id"] for r in manifest_runs if not r["pcap_packets"]]
+        if empty:
+            print(f"Hint: {len(empty)} run(s) captured 0 packets. Use tshark on loopback, or run "
+                  "as a user allowed to capture (Npcap on Windows).")
+        elif args.runs == 1:
+            print("Next: veritas-capture process --pcap", results[0].get("pcap_file"))
         else:
-            print("Next: veritas-capture process --pcap", result.get("pcap_file"))
+            print("Next: veritas-capture process --manifest")
     else:
         print("Next: Phase 2 capture (tshark + CICFlowMeter) on these flows.")
     return 0
@@ -117,7 +186,18 @@ def main() -> None:
     )
     gen.add_argument(
         "--pcap-out",
-        help="PCAP output path (with --record-pcap)",
+        help="PCAP output path (with --record-pcap; single run only)",
+    )
+    gen.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Independent generation runs; each gets its own PCAP and run_id (default: 1)",
+    )
+    gen.add_argument(
+        "--seed",
+        type=int,
+        help="Vary scenario parameters per run, reproducibly (default: use config values as-is)",
     )
     gen.set_defaults(func=_cmd_generate)
 

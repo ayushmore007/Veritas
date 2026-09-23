@@ -16,11 +16,24 @@ def _cmd_process(args: argparse.Namespace) -> int:
     pipeline = CapturePipeline(Path(args.config) if args.config else None)
     if args.use_tshark_sni:
         pipeline.config["metadata"]["use_tshark_sni"] = True
-    result = pipeline.run(
-        pcap_path=Path(args.pcap) if args.pcap else None,
-        labels_path=Path(args.labels) if args.labels else None,
-        output_path=Path(args.output) if args.output else None,
-    )
+    if args.entropy:
+        pipeline.config.setdefault("entropy", {})["enabled"] = True
+    if args.manifest is not None and args.pcap:
+        print("--manifest and --pcap are mutually exclusive")
+        return 2
+
+    if args.manifest is not None:
+        result = pipeline.run_manifest(
+            manifest_path=Path(args.manifest) if args.manifest else None,
+            labels_path=Path(args.labels) if args.labels else None,
+            output_path=Path(args.output) if args.output else None,
+        )
+    else:
+        result = pipeline.run(
+            pcap_path=Path(args.pcap) if args.pcap else None,
+            labels_path=Path(args.labels) if args.labels else None,
+            output_path=Path(args.output) if args.output else None,
+        )
     print(json.dumps(result, indent=2))
     if result["matched_count"] == 0:
         print("\nWarning: no labels matched to flows. Check PCAP ports and label dedupe settings.")
@@ -106,6 +119,18 @@ def main() -> None:
     proc.add_argument("--pcap", help="Input PCAP/PCAPNG path")
     proc.add_argument("--labels", help="Phase 1 flows.jsonl path")
     proc.add_argument("--output", help="Output flows_features.jsonl path")
+    proc.add_argument(
+        "--manifest",
+        nargs="?",
+        const="",
+        help="Process every run in runs_manifest.json as its own capture "
+        "(optional path; default from capture.yaml)",
+    )
+    proc.add_argument(
+        "--entropy",
+        action="store_true",
+        help="Add Phase 8c packet-size / inter-arrival entropy features",
+    )
     proc.add_argument(
         "--use-tshark-sni",
         action="store_true",

@@ -138,3 +138,10 @@ def test_stability_flags_a_coin_flip_agent():
 def test_stability_requires_at_least_two_repeats():
     with pytest.raises(ValueError):
         measure_stability(_FlipFlopAgent(), ["f1"], repeats=1)
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_few_large_captures_still_yield_a_test_split(seed):
+    """Three captures of five flows once dealt train, train, val — leaving nothing to test on."""
+    counts = make_splits(_flows(n_captures=3), seed=seed)["counts"]
+    assert all(counts[name] > 0 for name in SPLITS), counts

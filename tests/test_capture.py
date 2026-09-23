@@ -54,7 +54,7 @@ def test_metadata_fields_tagged_untrusted():
 
 def test_extract_flows_from_minimal_pcap(tmp_path: Path):
     pytest = __import__("pytest")
-    scapy = pytest.importorskip("scapy")
+    pytest.importorskip("scapy")
     from scapy.all import IP, UDP, Ether, wrpcap
 
     from veritas.capture.cicflowmeter_extract import extract_flows_from_pcap

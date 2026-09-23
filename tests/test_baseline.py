@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +10,7 @@ import pytest
 
 from veritas.baselines.dataset import records_to_frame, xy_from_frame
 from veritas.baselines.metrics import score_predictions
-from veritas.baselines.model import BaselineClassifier, build_sklearn_pipeline, train_classifier
+from veritas.baselines.model import build_sklearn_pipeline, train_classifier
 from veritas.capture.records import EnrichedFlowRecord
 
 
@@ -94,7 +93,7 @@ def test_build_sklearn_pipeline():
 
 @pytest.mark.slow
 def test_shap_explain_smoke(tmp_path: Path):
-    shap = pytest.importorskip("shap")
+    pytest.importorskip("shap")
     from veritas.baselines.explain import explain_with_shap
 
     x = np.array([[1.0, 2.0], [3.0, 4.0], [2.0, 1.0], [4.0, 3.0]])

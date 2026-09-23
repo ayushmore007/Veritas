@@ -495,6 +495,20 @@ async function loadLabTopology() {
   }
 }
 
+// Escape text for insertion into innerHTML. Scan results carry server-controlled strings (Server
+// banner, header values, host names); without this a scanned server can run script in the dashboard.
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"'`]/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;'
+  })[ch]);
+}
+
+// Show a measured value, or an em dash when it was not measured. Never a made-up default.
+function measured(value, suffix = '') {
+  if (value === null || value === undefined || value === '') return '—';
+  return `${esc(value)}${suffix}`;
+}
+
 // Render Top Server Selector Cards
 function renderServerCards() {
   const container = document.getElementById('serverCardsContainer');
@@ -511,17 +525,17 @@ function renderServerCards() {
           <div class="server-name-group">
             <div class="server-icon-wrap">${icon}</div>
             <div>
-              <div class="server-name">${srv.host} ${scanBadge}</div>
-              <div class="server-role">${srv.roleDescription ? srv.roleDescription.split('(')[0] : 'Scanned Server'}</div>
+              <div class="server-name">${esc(srv.host)} ${scanBadge}</div>
+              <div class="server-role">${esc(srv.roleDescription ? srv.roleDescription.split('(')[0] : 'Scanned Server')}</div>
             </div>
           </div>
-          <span class="server-health-indicator ${srv.postureClass}">
-            ${srv.securityScore}%
+          <span class="server-health-indicator ${esc(srv.postureClass)}">
+            ${esc(srv.securityScore)}%
           </span>
         </div>
         <div class="server-meta-row">
-          <div class="meta-item"><span class="meta-label">IP:</span> ${srv.ip}:${srv.port}</div>
-          <div class="meta-item"><span class="meta-label">Verdict:</span> ${srv.postureVerdict}</div>
+          <div class="meta-item"><span class="meta-label">IP:</span> ${esc(srv.ip)}:${esc(srv.port)}</div>
+          <div class="meta-item"><span class="meta-label">Verdict:</span> ${esc(srv.postureVerdict)}</div>
         </div>
       </div>
     `;
@@ -550,8 +564,10 @@ function renderActiveServer() {
   document.getElementById('telProto').textContent = srv.protocol || 'QUIC / TLS 1.3';
   
   const tf = srv.twinFeatures || {};
-  document.getElementById('telFlows').textContent = `${tf.flow_duration || 0.12} s (RTT)`;
-  document.getElementById('telFlowTag').textContent = `Entropy: ${tf.entropy || 4.8} bits/B`;
+  document.getElementById('telFlows').textContent =
+    tf.flow_duration != null ? `${tf.flow_duration} s (HTTP exchange)` : '— (not measured)';
+  document.getElementById('telFlowTag').textContent =
+    tf.entropy != null ? `Entropy: ${tf.entropy} bits/B` : 'Entropy: not measured';
 
   const isGrounded = srv.appliedPreventions && srv.appliedPreventions.includes('provenance_grounding_verifier');
   const defStatusEl = document.getElementById('telDefenseStatus');
@@ -637,9 +653,9 @@ function renderTestsGrid(srv) {
       <div class="test-card" onclick="openTestDeepDive(${idx})" title="Click to inspect detailed breakdown, root cause diagnosis & live fix">
         <div class="test-card-header">
           <div class="test-info">
-            <span class="test-id">${t.id} · ${t.category}</span>
-            <h3 class="test-name">${t.name}</h3>
-            <p class="test-desc">${t.description}</p>
+            <span class="test-id">${esc(t.id)} · ${esc(t.category)}</span>
+            <h3 class="test-name">${esc(t.name)}</h3>
+            <p class="test-desc">${esc(t.description)}</p>
           </div>
           <span class="test-status-badge ${badgeClass}">${badgeIcon} ${badgeText}</span>
         </div>
@@ -648,17 +664,17 @@ function renderTestsGrid(srv) {
           <div class="telemetry-row">
             <span class="telemetry-key">Observed Metric:</span>
             <span class="telemetry-val" style="color: ${t.status === 'failed' ? '#f87171' : (t.status === 'warning' ? '#fbbf24' : '#34d399')}; font-weight:700;">
-              ${t.observed_value}
+              ${esc(t.observed_value)}
             </span>
           </div>
           <div class="telemetry-row">
             <span class="telemetry-key">Security Standard:</span>
-            <span class="telemetry-val">${t.baseline}</span>
+            <span class="telemetry-val">${esc(t.baseline)}</span>
           </div>
         </div>
 
         <div class="test-recommendation-note">
-          <span>🔍 ${t.note || t.remediation || 'Standard verified.'}</span>
+          <span>🔍 ${esc(t.note || t.remediation || 'Standard verified.')}</span>
           <span class="test-inspect-hint">Deep Dive ➜</span>
         </div>
       </div>
@@ -738,24 +754,24 @@ function renderPreventionCards(srv) {
       <div class="prevention-card ${isApplied ? 'applied' : ''}">
         <div class="prevention-header">
           <div class="prevention-title-group">
-            <span class="prevention-tag">${p.category} · Severity: ${p.severity}</span>
-            <h3 class="prevention-name">${p.title}</h3>
+            <span class="prevention-tag">${esc(p.category)} · Severity: ${esc(p.severity)}</span>
+            <h3 class="prevention-name">${esc(p.title)}</h3>
           </div>
           <span class="test-status-badge ${isApplied ? 'status-passed' : 'status-failed'}">
             ${isApplied ? '✓ DEFENSE ACTIVE' : '⚠ ACTION NEEDED'}
           </span>
         </div>
 
-        <p class="prevention-desc">${p.description}</p>
+        <p class="prevention-desc">${esc(p.description)}</p>
 
         <div class="prevention-mechanism-box">
           <div class="mechanism-title">Live Server Deployment Scope:</div>
-          <div>${p.permission_required ? `⚠️ Requires Elevated Server Access (Root / Web Server Admin on ${srv.host})` : `🛡️ Local Veritas AI Engine (Zero External Permission Required)`}</div>
+          <div>${p.permission_required ? `⚠️ Requires Elevated Server Access (Root / Web Server Admin on ${esc(srv.host)})` : `🛡️ Local Veritas AI Engine (Zero External Permission Required)`}</div>
         </div>
 
         <div class="prevention-actions">
-          <span class="efficacy-gain">+${p.points_gain || 20}% Score Gain</span>
-          <button class="btn ${isApplied ? 'btn-outline' : 'btn-defense'} btn-sm" onclick="openRemediationConsole('${p.key}')">
+          <span class="efficacy-gain">+${esc(p.points_gain ?? 0)}% Score Gain</span>
+          <button class="btn ${isApplied ? 'btn-outline' : 'btn-defense'} btn-sm" onclick="openRemediationConsole(${esc(JSON.stringify(String(p.key)))})">
             <span>${isApplied ? '✓ Hardening Verified' : '🛠️ Deploy & Verify Patch'}</span>
           </button>
         </div>
@@ -900,7 +916,16 @@ async function runLiveVerificationProbe(simulate = false) {
   desc.textContent = `Sending cryptographic HTTP/TLS probe over the wire to ${server.host}...`;
 
   let verified = false;
+  let simulated = simulate;
   let message = '';
+
+  // One live check per prevention. Anything without a probe is reported as unverifiable by the
+  // backend rather than mapped onto an unrelated check.
+  const probeFor = {
+    deploy_security_headers: 'TEST-HSTS',
+    block_dotfiles: 'TEST-RECON-FUZZ',
+    provenance_grounding_verifier: 'TEST-VERITAS-GROUNDING',
+  };
 
   if (state.backendOnline) {
     try {
@@ -910,39 +935,39 @@ async function runLiveVerificationProbe(simulate = false) {
         body: JSON.stringify({
           hostname: server.host,
           port: server.port,
-          test_id: key === 'deploy_security_headers' ? 'TEST-HSTS' : (key === 'block_dotfiles' ? 'TEST-RECON-FUZZ' : 'TEST-VERITAS-GROUNDING'),
+          test_id: probeFor[key] || key,
           simulate: simulate
         })
       });
 
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
-        verified = data.verified;
-        message = data.message;
+        verified = Boolean(data.verified);
+        simulated = simulated || Boolean(data.simulated);
+        message = data.message || '';
+      } else {
+        message = data.error || `Verification request failed (HTTP ${res.status}).`;
       }
     } catch (e) {
       console.warn('Live verification probe API error', e);
+      message = 'Verification request failed: backend unreachable.';
     }
   } else {
-    // Local / internal mode
-    verified = true;
-    message = `Deployment Verified: Patch actively detected on ${server.host}.`;
-  }
-
-  if (simulate) {
-    verified = true;
-    message = `Demo Simulation Verified: Patch actively running on ${server.host}.`;
+    // Nothing can be probed without the backend; do not report a fix as verified.
+    message = 'Backend offline — no probe was sent, so the fix cannot be verified.';
   }
 
   probeBtn.disabled = false;
 
   if (verified) {
-    icon.textContent = '🛡️';
-    title.textContent = 'Live Server Patch Verified & Active!';
-    title.style.color = '#34d399';
+    icon.textContent = simulated ? '🧪' : '🛡️';
+    title.textContent = simulated
+      ? 'Simulated — not verified on a live server'
+      : 'Live Server Patch Verified & Active!';
+    title.style.color = simulated ? '#fbbf24' : '#34d399';
     desc.textContent = message || 'Live socket probe confirmed the hardening headers/rules are actively delivered by the server on the wire.';
-    badge.className = 'test-status-badge status-passed';
-    badge.textContent = '✓ VERIFIED & DEFENDED';
+    badge.className = simulated ? 'test-status-badge status-warning' : 'test-status-badge status-passed';
+    badge.textContent = simulated ? '🧪 SIMULATED' : '✓ VERIFIED & DEFENDED';
 
     // Apply the fix in state
     if (!server.appliedPreventions) server.appliedPreventions = [];
@@ -953,7 +978,9 @@ async function runLiveVerificationProbe(simulate = false) {
     renderActiveServer();
     renderServerCards();
 
-    showToast(`✓ Live Verification Passed for ${server.host}! Security Score Elevated.`);
+    showToast(simulated
+      ? `Simulated fix applied for ${server.host} (not verified live).`
+      : `✓ Live Verification Passed for ${server.host}! Security Score Elevated.`);
   } else {
     icon.textContent = '⚠️';
     title.textContent = 'Live Verification Probe Failed';
@@ -1029,21 +1056,22 @@ function renderTwinSplit(srv) {
 
   const f = srv.twinFeatures || {};
   measuredBody.innerHTML = `
-    <tr><td>Flow Duration (RTT)</td><td class="val-highlight">${f.flow_duration || 0.12} s</td><td>0.05 - 2.0 s</td></tr>
-    <tr><td>Forward Packet Count</td><td class="val-highlight">${f.tot_fwd_pkts || 18} pkts</td><td>10 - 50 pkts</td></tr>
-    <tr><td>Backward Packet Count</td><td class="val-highlight">${f.tot_bwd_pkts || 24} pkts</td><td>10 - 50 pkts</td></tr>
-    <tr><td>Total Bytes Sent</td><td class="val-highlight">${f.totlen_fwd_pkts || 1420} B</td><td>< 50,000 B</td></tr>
-    <tr><td>Down / Up Ratio</td><td class="val-highlight">${f.down_up_ratio || 13.0}</td><td>> 2.0 (Web)</td></tr>
-    <tr><td>Flow IAT Mean</td><td class="val-highlight">${f.flow_iat_mean || 0.005} s</td><td>Non-periodic</td></tr>
-    <tr><td>Payload Entropy</td><td class="val-highlight">${f.entropy || 4.8} bits/B</td><td>< 6.5 bits/B</td></tr>
+    <tr><td>HTTP Exchange Duration</td><td class="val-highlight">${measured(f.flow_duration, ' s')}</td><td>Scan wall time</td></tr>
+    <tr><td>Requests Sent</td><td class="val-highlight">${measured(f.http_requests)}</td><td>Counted by client</td></tr>
+    <tr><td>Responses Received</td><td class="val-highlight">${measured(f.http_responses)}</td><td>Counted by client</td></tr>
+    <tr><td>Bytes Sent</td><td class="val-highlight">${measured(f.bytes_sent, ' B')}</td><td>Request line + headers + body</td></tr>
+    <tr><td>Bytes Received</td><td class="val-highlight">${measured(f.bytes_received, ' B')}</td><td>Response headers + body</td></tr>
+    <tr><td>Down / Up Ratio</td><td class="val-highlight">${measured(f.down_up_ratio)}</td><td>&gt; 2.0 (Web)</td></tr>
+    <tr><td>Mean Inter-Request Gap</td><td class="val-highlight">${measured(f.flow_iat_mean, ' s')}</td><td>Non-periodic</td></tr>
+    <tr><td>Response Body Entropy</td><td class="val-highlight">${measured(f.entropy, ' bits/B')}</td><td>&lt; 6.5 bits/B</td></tr>
   `;
 
   const meta = srv.metadataUntrusted || {};
   untrustedBody.innerHTML = `
-    <tr><td>Server Banner</td><td class="val-highlight">${meta.server_banner || 'Masked'}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
-    <tr><td>Server Name Indication (SNI)</td><td class="val-highlight">${meta.sni || srv.host}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
-    <tr><td>Content-Type Header</td><td class="val-highlight">${meta.content_type || 'text/html'}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
-    <tr><td>HTTP Protocol / ALPN</td><td class="val-highlight">${srv.protocol || 'h3 / TLS 1.3'}</td><td><span style="color:#34d399;">Grounded</span></td></tr>
+    <tr><td>Server Banner</td><td class="val-highlight">${esc(meta.server_banner || 'Masked')}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
+    <tr><td>Server Name Indication (SNI)</td><td class="val-highlight">${esc(meta.sni || srv.host)}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
+    <tr><td>Content-Type Header</td><td class="val-highlight">${esc(meta.content_type || '—')}</td><td><span style="color:#fbbf24;">Attacker Authored</span></td></tr>
+    <tr><td>Negotiated TLS / Cipher</td><td class="val-highlight">${esc([meta.tls_version, meta.cipher].filter(Boolean).join(' / ') || srv.protocol || '—')}</td><td><span style="color:#fbbf24;">Server Chosen</span></td></tr>
   `;
 }
 
@@ -1298,6 +1326,7 @@ async function performLiveScan(target) {
   
   const scanBtn = document.getElementById('btnRunLiveScan');
   if (scanBtn) scanBtn.disabled = true;
+  let failure = 'unknown error';
 
   try {
     const res = await fetch('/api/scan', {
@@ -1332,276 +1361,21 @@ async function performLiveScan(target) {
         return;
       }
     }
+    // The backend answered but could not scan (bad target, unreachable host, server error).
+    let reason = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body && body.error) reason = body.error;
+    } catch (e) { /* non-JSON error body */ }
+    failure = reason;
   } catch (e) {
     console.warn('Backend live scan error', e);
+    failure = 'backend unreachable — start it with `python web/server.py`';
   }
 
-  // Fallback if backend encountered a network issue
-  const fallbackHost = target.replace(/^https?:\/\//i, '').split('/')[0];
-  const isVulnSite = fallbackHost.includes('vuln') || fallbackHost.includes('testphp');
-  
-  const fallbackServer = {
-    id: `scan_${Date.now()}`,
-    host: fallbackHost,
-    role: 'server',
-    roleDescription: `Live Scanned Target (${isVulnSite ? 'HTTP' : 'HTTPS'})`,
-    ip: isVulnSite ? '18.192.172.30' : '104.16.132.229',
-    port: isVulnSite ? 80 : 443,
-    localhost_bind: '127.0.0.1',
-    trafficClass: isVulnSite ? 'malicious' : 'benign',
-    protocol: isVulnSite ? 'HTTP (Insecure)' : 'HTTPS / TLS 1.3',
-    securityScore: isVulnSite ? 34 : 96,
-    postureVerdict: isVulnSite ? 'CRITICAL RISK' : 'HARDENED DEFENSE',
-    postureClass: isVulnSite ? 'health-vulnerable' : 'health-hardened',
-    description: isVulnSite 
-      ? `Live scan on ${fallbackHost}: Unencrypted cleartext HTTP transport, missing HSTS, CSP, and X-Frame-Options headers.`
-      : `Live scan on ${fallbackHost}: Robust TLS 1.3 transport, strict security headers, zero dotfile leaks.`,
-    isRecentScan: true,
-    twinFeatures: {
-      flow_duration: 0.28,
-      tot_fwd_pkts: 14,
-      tot_bwd_pkts: 18,
-      totlen_fwd_pkts: 980,
-      totlen_bwd_pkts: 6200,
-      down_up_ratio: 6.32,
-      flow_iat_mean: 0.012,
-      flow_iat_max: 0.045,
-      entropy: isVulnSite ? 7.42 : 4.95,
-      sni: fallbackHost,
-      cipher: isVulnSite ? 'None (Plaintext HTTP)' : 'TLS_AES_128_GCM_SHA256'
-    },
-    metadataUntrusted: {
-      server_banner: isVulnSite ? 'nginx/1.19.0 (Ubuntu)' : 'cloudflare',
-      sni: fallbackHost,
-      content_type: 'text/html; charset=utf-8'
-    },
-    appliedPreventions: isVulnSite ? [] : ['provenance_grounding_verifier'],
-    tests: isVulnSite ? [
-      { 
-        id: 'TEST-DNS', 
-        name: 'DNS Resolution & Topology Mapping', 
-        category: 'Network Topology', 
-        status: 'passed', 
-        metric: 'Host Resolution', 
-        observed_value: '1 IP(s) [18.192.172.30]', 
-        baseline: 'Valid A/AAAA Records', 
-        description: 'Resolves target hostname to network address.', 
-        verdict_explanation: 'DNS resolution mapped testphp.vulnweb.com to public AWS IP 18.192.172.30.',
-        threat_impact: 'DNS records are publicly resolvable.',
-        root_cause_diagnosis: 'PASSED: Domain name is active.',
-        remediation_code: '# DNS Verified.',
-        auto_fixable: false, 
-        permission_required: false 
-      },
-      { 
-        id: 'TEST-PORT', 
-        name: 'Network Port Exposure & Service Surface', 
-        category: 'Perimeter Security', 
-        status: 'passed', 
-        metric: 'Exposed Ports', 
-        observed_value: 'Open ports: [80]', 
-        baseline: 'Only secure web ports open', 
-        description: 'Scans network ports.', 
-        verdict_explanation: 'Port 80 (HTTP) is listening. Port 443 (HTTPS) is closed.',
-        threat_impact: 'Port 80 serves plaintext HTTP without cryptographic protection.',
-        root_cause_diagnosis: 'Port 80 open without port 443 redirect.',
-        remediation_code: 'iptables -A INPUT -p tcp --dport 80 -j ACCEPT',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-TLS-VER', 
-        name: 'TLS Transport & Encryption', 
-        category: 'Cryptographic Security', 
-        status: 'failed', 
-        metric: 'Transport Encryption', 
-        observed_value: 'CLEARTEXT HTTP (Zero TLS / SSL Encryption)', 
-        baseline: 'TLS 1.2 or TLS 1.3 Mandatory', 
-        description: 'The server serves unencrypted cleartext HTTP.', 
-        verdict_explanation: 'FAILED (CRITICAL): The target website does not support TLS or HTTPS encryption. All requests, cookies, and passwords are transmitted across the public internet in unencrypted plaintext.',
-        threat_impact: 'Any actor on the network path (Wi-Fi, ISP, upstream routers) can sniff sensitive user data or inject malicious scripts via Man-in-the-Middle (MITM) attacks.',
-        root_cause_diagnosis: 'FAILED: Missing SSL/TLS certificate on web server. Requires Root / Server Admin permissions to install Let\'s Encrypt / Certbot certificate and configure port 443 listener.',
-        remediation_code: '# Install SSL Certificate & Enable HTTPS Redirection:\ncertbot --nginx -d testphp.vulnweb.com',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-HSTS', 
-        name: 'HTTP Strict Transport Security (HSTS)', 
-        category: 'HTTP Security Headers', 
-        status: 'failed', 
-        metric: 'HSTS Header', 
-        observed_value: 'Missing Strict-Transport-Security (HSTS) header', 
-        baseline: 'max-age=31536000', 
-        description: 'Forces secure HTTPS communication.', 
-        verdict_explanation: 'FAILED: Strict-Transport-Security header is completely missing from HTTP responses.',
-        threat_impact: 'Browsers are allowed to make unencrypted requests, rendering users vulnerable to SSLStrip attacks.',
-        root_cause_diagnosis: 'FAILED: Web server configuration lacks HSTS header directive. Requires Web Server Admin permissions to edit NGINX/Apache configuration.',
-        remediation_code: 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-CSP', 
-        name: 'Content Security Policy (CSP)', 
-        category: 'HTTP Security Headers', 
-        status: 'failed', 
-        metric: 'CSP Header', 
-        observed_value: 'Missing Content-Security-Policy', 
-        baseline: 'Strict script-src and default-src', 
-        description: 'Mitigates XSS and data injection.', 
-        verdict_explanation: 'FAILED: No Content-Security-Policy header returned.',
-        threat_impact: 'Vulnerable to stored and reflected Cross-Site Scripting (XSS). Attackers can inject arbitrary JavaScript to hijack user accounts.',
-        root_cause_diagnosis: 'FAILED: Missing CSP security policy. Web Server Admin write access needed to update server config.',
-        remediation_code: 'add_header Content-Security-Policy "default-src \'self\'; script-src \'self\'; object-src \'none\';" always;',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-XFO', 
-        name: 'Clickjacking Defense (X-Frame-Options)', 
-        category: 'HTTP Security Headers', 
-        status: 'failed', 
-        metric: 'Frame Options', 
-        observed_value: 'Missing or Weak (None)', 
-        baseline: 'X-Frame-Options: SAMEORIGIN', 
-        description: 'Prevents invisible iframe clickjacking.', 
-        verdict_explanation: 'FAILED: Missing X-Frame-Options header and CSP frame-ancestors directive.',
-        threat_impact: 'Malicious websites can embed this target website in an invisible iframe and trick authenticated users into clicking buttons unknowingly.',
-        root_cause_diagnosis: 'FAILED: Missing clickjacking defense headers. Requires Web Server Admin permissions.',
-        remediation_code: 'add_header X-Frame-Options "SAMEORIGIN" always;',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-INFO-LEAK', 
-        name: 'Server Technology & Version Disclosure', 
-        category: 'Information Disclosure', 
-        status: 'warning', 
-        metric: 'Version Leakage', 
-        observed_value: 'Server: nginx/1.19.0 (Ubuntu) | Powered-By: PHP/5.6.40', 
-        baseline: 'Server tokens suppressed', 
-        description: 'Checks if web server leaks specific software versions.', 
-        verdict_explanation: 'WARNING: The server explicitly advertises old software versions: NGINX 1.19.0 (Ubuntu) and PHP 5.6.40.',
-        threat_impact: 'Reveals precise outdated software versions with known public CVE vulnerabilities, making automated exploit scanning trivial for attackers.',
-        root_cause_diagnosis: 'WARNING: Server tokens enabled in server configuration. Requires Web Server Admin permissions.',
-        remediation_code: '# In nginx.conf:\nserver_tokens off;\n# In php.ini:\nexpose_php = Off',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-VERITAS-GROUNDING', 
-        name: 'Metadata Prompt-Injection & AI Defender Grounding (Veritas)', 
-        category: 'AI Defense & Provenance', 
-        status: 'failed', 
-        metric: 'AI Reasoning Grounding', 
-        observed_value: 'VULNERABLE (Attacker text controls decision)', 
-        baseline: '100% Measured Twin Anchor', 
-        description: 'Tests if adversarial SNI headers trick AI triage agent.', 
-        verdict_explanation: 'FAILED: Undefended AI triage agent relies on untrusted HTTP server banners and remote headers rather than measured Digital Twin physical packet statistics.',
-        threat_impact: 'Allows threat actors to bypass AI-driven triage systems by poisoning metadata strings.',
-        root_cause_diagnosis: 'FAILED: Veritas Provenance Verifier is inactive. Deploying Veritas Grounding anchors decisions 100% on measured twin features.',
-        remediation_code: 'veritas-twin enforce --host testphp.vulnweb.com --verifier provenance_grounding',
-        auto_fixable: true, 
-        permission_required: false 
-      }
-    ] : [
-      { 
-        id: 'TEST-DNS', 
-        name: 'DNS Resolution & Topology Mapping', 
-        category: 'Network Topology', 
-        status: 'passed', 
-        metric: 'Host Resolution', 
-        observed_value: '2 IP(s) [104.16.132.229, 104.16.133.229]', 
-        baseline: 'Valid A/AAAA Records', 
-        description: 'Resolves target hostname.', 
-        verdict_explanation: 'Resolved to authoritative Anycast network infrastructure.',
-        threat_impact: 'Zero DNS hijacking vulnerability.',
-        root_cause_diagnosis: 'PASSED: Anycast DNS active.',
-        remediation_code: '# DNS Verified.',
-        auto_fixable: false, 
-        permission_required: false 
-      },
-      { 
-        id: 'TEST-TLS-VER', 
-        name: 'TLS Protocol Handshake & Version', 
-        category: 'Cryptographic Security', 
-        status: 'passed', 
-        metric: 'Negotiated Protocol', 
-        observed_value: 'TLS 1.3 (AEAD-AES-128-GCM)', 
-        baseline: 'TLS 1.2 or TLS 1.3 mandatory', 
-        description: 'Verifies cryptographic protocol.', 
-        verdict_explanation: 'Modern TLS 1.3 handshake negotiated with PFS.',
-        threat_impact: 'Cryptographically secure.',
-        root_cause_diagnosis: 'PASSED: Modern cipher suite.',
-        remediation_code: '# TLS 1.3 Active.',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-HSTS', 
-        name: 'HTTP Strict Transport Security (HSTS)', 
-        category: 'HTTP Security Headers', 
-        status: 'passed', 
-        metric: 'HSTS Header', 
-        observed_value: 'Present: max-age=31536000; includeSubDomains; preload', 
-        baseline: 'max-age=31536000', 
-        description: 'Forces secure HTTPS communication.', 
-        verdict_explanation: 'HSTS preloaded with 1-year max age.',
-        threat_impact: 'Immune to SSL stripping.',
-        root_cause_diagnosis: 'PASSED: HSTS preloaded.',
-        remediation_code: '# HSTS Active.',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-CSP', 
-        name: 'Content Security Policy (CSP)', 
-        category: 'HTTP Security Headers', 
-        status: 'passed', 
-        metric: 'CSP Header', 
-        observed_value: 'Active (Strict default-src and script-src)', 
-        baseline: 'Strict script-src', 
-        description: 'Mitigates XSS.', 
-        verdict_explanation: 'Strict Content Security Policy enforced.',
-        threat_impact: 'Zero XSS injection surface.',
-        root_cause_diagnosis: 'PASSED: CSP enforced.',
-        remediation_code: '# CSP Active.',
-        auto_fixable: true, 
-        permission_required: true 
-      },
-      { 
-        id: 'TEST-VERITAS-GROUNDING', 
-        name: 'Metadata Prompt-Injection & AI Defender Grounding (Veritas)', 
-        category: 'AI Defense & Provenance', 
-        status: 'passed', 
-        metric: 'AI Reasoning Grounding', 
-        observed_value: 'PROTECTED (0.00% Attack Success Rate)', 
-        baseline: '100% Measured Twin Anchor', 
-        description: 'Tests AI grounding.', 
-        verdict_explanation: 'Grounded in measured Twin physical packet metrics.',
-        threat_impact: 'Zero prompt injection leak.',
-        root_cause_diagnosis: 'PASSED: Provenance verifier active.',
-        remediation_code: '# Provenance Verifier Active.',
-        auto_fixable: true, 
-        permission_required: false 
-      }
-    ],
-    recommendedPreventions: isVulnSite ? [
-      { key: 'provenance_grounding_verifier', title: 'Deploy Veritas Provenance-Grounding Verifier', category: 'AI Defense Engine', severity: 'CRITICAL', status: 'ready_to_apply', permission_required: false, description: 'Rejects attacker-authored SNI claims; anchors triage verdicts on measured Twin telemetry.', action_label: 'Enable Veritas Grounding', can_auto_execute: true, points_gain: 30 },
-      { key: 'deploy_security_headers', title: 'Deploy Hardened Security Headers & SSL Redirection', category: 'Web Server Hardening', severity: 'HIGH', status: 'permission_needed', permission_required: true, description: 'Injects HSTS, CSP, X-Frame-Options, and enforces HTTPS.', action_label: 'Deploy Headers Patch', can_auto_execute: true, points_gain: 25 },
-      { key: 'block_dotfiles', title: 'Block Public Access to Sensitive Environment Files', category: 'Access Control', severity: 'CRITICAL', status: 'permission_needed', permission_required: true, description: 'Blocks access to /.env and /.git.', action_label: 'Apply Dotfile Access Rules', can_auto_execute: true, points_gain: 20 }
-    ] : []
-  };
-
-  state.servers.unshift(fallbackServer);
-  state.selectedServerIndex = 0;
-  savePersistentState();
-  renderServerCards();
-  renderActiveServer();
-  
+  // Never substitute invented results for a scan that did not happen.
   if (scanBtn) scanBtn.disabled = false;
-  showToast(`✓ Scanned ${fallbackHost}! Digital Twin Ingested. Score: ${fallbackServer.securityScore}%`);
+  showToast(`✗ Scan of ${target} failed: ${failure}`);
 }
 
 // Setup Tab Navigation
@@ -1628,7 +1402,7 @@ function showToast(message) {
 
   const toast = document.createElement('div');
   toast.className = 'toast';
-  toast.innerHTML = `<span>🛰️</span><span>${message}</span>`;
+  toast.innerHTML = `<span>🛰️</span><span>${esc(message)}</span>`;
   container.appendChild(toast);
 
   setTimeout(() => {

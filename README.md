@@ -71,17 +71,20 @@ cross-origin API calls. Use `--host` only on a network you control. Live scans a
 python scripts/reproduce.py --quick              # smoke: Phases 1–5 + agent (~5 flows)
 python scripts/reproduce.py --skip-generate      # reuse existing PCAP/labels
 python scripts/reproduce.py --provider ollama    # real local model for agent steps
+python scripts/reproduce.py --runs 60 --seed 1 --entropy   # multi-capture corpus
 ```
 
-Full-corpus regeneration (620 flows, ~50 min) requires multi-run testbed support that is not
-wired yet. Until then, Phase 9 paper numbers come from the saved report at
-`data/processed/eval/phase9_report.json` (validated by `veritas-eval run`).
+Each `--runs` run is its own capture (own PCAP and `run_id`), which is what the train/test split
+groups on; `--seed` varies scenario parameters per run, reproducibly. The live Phase 6–8
+experiment runners are not in the repository yet, so Phase 9 paper numbers come from the saved
+report at `data/processed/eval/phase9_report.json` (validated by `veritas-eval run`);
+`reproduce.py` skips Phase 9 with a note when that file is absent.
 
 ## Pipeline, stage by stage
 
 ```powershell
 veritas-testbed generate --runs 60 --seed 1 --record-pcap   # Phase 1: labeled QUIC flows + PCAPs
-veritas-capture process --manifest --entropy                # Phase 2 + 8c: features + entropy
+veritas-capture process --manifest --entropy                # Phase 2 + 8c: every run, + entropy
 veritas-twin ingest                                         # Phase 3: measured-feature oracle
 veritas-agent split                                         # fix the held-out test set once
 veritas-baseline train && veritas-baseline evaluate --split test   # Phase 5: ML baseline
