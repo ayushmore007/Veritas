@@ -1,0 +1,24 @@
+# Veritas Phase 1 — isolated lab network (testbed only)
+# Usage: docker compose -f docker/docker-compose.yml run --rm testbed
+
+services:
+  testbed:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: veritas-phase1-testbed
+    volumes:
+      - ../data:/app/data
+    environment:
+      - VERITAS_CONFIG=config/default.yaml
+    networks:
+      - veritas-lab
+    # Single container runs servers + client orchestrator (works on Windows/macOS/Linux)
+    command: ["veritas-testbed", "generate", "--config", "config/testbed.yaml"]
+
+networks:
+  veritas-lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

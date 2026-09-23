@@ -1,0 +1,26 @@
+# Phase 3 — Digital Twin Tier 1 (measured trust anchor)
+# Tier 2 predictive simulation: stretch goal (not enabled here)
+
+tier: 1
+ethics: testbed_only
+
+store:
+  db_path: data/processed/twin/twin.db
+  snapshot_dir: data/processed/twin/snapshots
+
+ingest:
+  default_features: data/processed/features/flows_features.jsonl
+  # Only field_trust=trusted columns enter the oracle; metadata stays in side channel
+  trust_filter: measured_only
+
+query:
+  default_host_limit: 50
+
+replay:
+  # Metadata-ablation replay test (Phase 8): strip untrusted fields for re-evaluation
+  strip_fields:
+    - sni
+    - alpn
+    - quic_version
+    - connection_id
+    - metadata_source

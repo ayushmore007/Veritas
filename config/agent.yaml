@@ -1,0 +1,38 @@
+# Phase 4 — AI defender agent (IDS-Agent-style reason-act loop)
+# Reimplemented from the paper; no official code release. Cite: IDS-Agent, OpenReview uuCcK4cmlH.
+
+ethics: testbed_only
+
+llm:
+  # ollama = real defender (paper numbers must come from here)
+  # deterministic = offline simulacrum for developing Phases 7-8 without a GPU. NOT a detector.
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.1:8b
+  temperature: 0.0
+  timeout_sec: 120
+  num_ctx: 8192
+  deterministic:
+    trust_metadata: true
+    injection_susceptible: true
+
+prompt:
+  # baseline = undefended agent, the Phase 7a attack target.
+  # hardened = spotlighting-style provenance instructions; belongs to Phase 8a, kept here so the
+  # before/after is measurable with one flag.
+  profile: baseline
+  # json_slot   = untrusted metadata delivered as a JSON value (structural separation)
+  # inline_concat = attacker strings spliced into the instruction body (naive baseline for 7a)
+  metadata_channel: json_slot
+
+loop:
+  max_steps: 4
+  # Always take one measured observation before reasoning. Engineering choice, not a defense.
+  # Set false in Phase 7 to test whether the model will decide from metadata alone.
+  seed_with_flow_stats: true
+
+tools:
+  host_history_limit: 20
+
+output:
+  traces_file: data/processed/agent/traces.jsonl

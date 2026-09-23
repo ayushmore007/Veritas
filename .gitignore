@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+
+# Data & captures (follow dataset terms — do not commit raw CIC/UNSW blobs)
+data/raw/
+data/processed/
+data/external/
+data/logs/
+*.pcap
+*.pcapng
+
+# Cloned reference repos (check LICENSE before reuse)
+references/
+
+# Models & checkpoints
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

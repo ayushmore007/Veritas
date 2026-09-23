@@ -1,0 +1,17 @@
+# Pin for reproducibility; prefer: pip install -e ".[dev]"
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+pyyaml>=6.0
+pydantic>=2.0
+scapy>=2.5
+aioquic>=1.0
+cicflowmeter>=0.1.6
+shap>=0.43
+lime>=0.2
+httpx>=0.27
+matplotlib>=3.8
+cryptography>=42.0
+pytest>=7.4
+pytest-asyncio>=0.23
+ruff>=0.1

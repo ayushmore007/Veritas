@@ -1,0 +1,45 @@
+# Phase 5 — ML baseline + explainability
+# Primary: sklearn ensemble on behavioural CICFlowMeter features (no label leakage).
+# Comparison targets (cite only until LICENSE verified): NetMamba, ET-BERT (MIT), YaTC.
+
+ethics: testbed_only
+
+data:
+  features_file: data/processed/features/flows_features.jsonl
+  split_manifest: data/processed/splits/split.json
+
+model:
+  # sklearn = committed baseline (no external repo copy required)
+  # et_bert / netmamba = comparison placeholders — wire when LICENSE confirmed
+  backend: sklearn
+  sklearn:
+    estimator: random_forest  # random_forest | gradient_boosting
+    n_estimators: 100
+    random_state: 0
+    class_weight: balanced
+
+features:
+  # Use behavioural_features() — identity fields (incl. dst_port) excluded
+  # See veritas/features.py for leakage rationale
+  min_train_samples: 3
+
+output:
+  model_dir: data/processed/baselines
+  model_file: model.joblib
+  metrics_file: metrics.json
+  explanations_file: explanations.jsonl
+  predictions_file: predictions.jsonl
+
+explainability:
+  shap: true
+  lime: true
+  top_k_features: 8
+
+comparison:
+  agent_traces: data/processed/agent/traces.jsonl
+
+references:
+  # Cite in paper methods — do not copy code without LICENSE check
+  et_bert: "ET-BERT (MIT) — arXiv:2202.06335"
+  netmamba: "NetMamba — verify LICENSE before code reuse"
+  yatc: "YaTC — verify LICENSE before code reuse"

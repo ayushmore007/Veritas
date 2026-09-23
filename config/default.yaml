@@ -1,0 +1,39 @@
+# Veritas default configuration
+# Override with VERITAS_CONFIG env var or CLI --config
+
+project:
+  name: veritas
+  ethics: testbed_only  # never target production networks
+
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  data_external: data/external
+  twin_store: data/processed/twin
+  references: references
+  logs: data/logs
+
+capture:
+  feature_schema: cicflowmeter_80
+  tool: cicflowmeter  # python package; java CICFlowMeter optional
+
+agent:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.1:8b
+  # Before copying IDS-Agent code: none available — reimplement per docs/license-audit.md
+
+baselines:
+  primary: sklearn_ensemble  # until NetMamba LICENSE confirmed
+  comparison:
+    - et_bert      # MIT — OK to clone in Phase 5
+    - netmamba     # verify LICENSE first
+    - yatc         # verify LICENSE first
+
+evaluation:
+  detection_target_f1: 0.95  # aspirational; report honestly
+  report_adaptive_asr: true
+
+platform:
+  testbed: docker  # docker | mininet | mininet_wsl
+  note: Mininet requires Linux or WSL2

@@ -1,0 +1,34 @@
+# Phase 2 — capture and CICFlowMeter feature extraction
+# Cite: CICFlowMeter tool (Lashkari et al.); SoK on encrypted-traffic features
+
+pcap:
+  default_input: data/raw/pcap/phase1.pcapng
+  filter_ports: [4433, 4434, 4435]
+
+labels:
+  default_input: data/raw/labels/flows.jsonl
+  dedupe_strategy: last_per_scenario_port
+  # Prefer labels from the most recent generate run (append-only flows.jsonl)
+  use_latest_run: true
+  latest_run_count: 5
+
+output:
+  features_dir: data/processed/features
+  cicflowmeter_csv_dir: data/processed/cicflowmeter
+  features_file: flows_features.jsonl
+
+metadata:
+  # Lab port→SNI map is default (fast). Enable tshark for dissected ClientHello SNI.
+  use_tshark_sni: false
+  tshark_timeout_sec: 20
+  tshark_display_filter: tls.handshake.extensions_server_name
+  default_alpn: h3
+
+# Port → SNI fallback when tshark cannot parse ClientHello (lab-controlled mapping)
+port_sni_map:
+  4433: benign.internal.test
+  4434: c2.malicious.test
+  4435: exfil.malicious.test
+
+trust:
+  config: config/trust_labels.yaml

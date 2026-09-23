@@ -1,0 +1,65 @@
+# Phase 1 testbed topology (lab-only; never point at production networks)
+#
+# Anchor: QUIC-era ML-IDS — IEEE TNSM 2025, DOI 10.1109/TNSM.2025.3540753
+# (cite in paper; method informs flow labelling and QUIC feature focus)
+
+ethics: testbed_only
+
+network:
+  name: veritas-lab
+  docker_subnet: 172.28.0.0/24
+
+hosts:
+  benign_server:
+    role: server
+    sni: benign.internal.test
+    port: 4433
+    docker_ip: 172.28.0.10
+    localhost_bind: 127.0.0.1
+
+  malicious_c2:
+    role: server
+    sni: c2.malicious.test
+    port: 4434
+    docker_ip: 172.28.0.20
+    localhost_bind: 127.0.0.1
+
+  malicious_exfil:
+    role: server
+    sni: exfil.malicious.test
+    port: 4435
+    docker_ip: 172.28.0.21
+    localhost_bind: 127.0.0.1
+
+  client:
+    role: client
+    docker_ip: 172.28.0.100
+
+scenarios:
+  benign:
+    - id: browse
+      description: Typical HTTP/3 page fetches (small objects)
+      repetitions: 5
+    - id: stream
+      description: Large download resembling streaming/bulk transfer
+      repetitions: 2
+      chunk_kb: 256
+  malicious:
+    - id: c2_beacon
+      description: Low-volume periodic heartbeat to controller
+      interval_sec: 2.0
+      repetitions: 8
+      attack_type: c2_beacon
+    - id: data_exfil
+      description: Sustained upload to unusual destination
+      upload_kb: 512
+      attack_type: data_exfil
+    - id: scan_probe
+      description: Rapid probe of multiple paths/ports on malicious host
+      paths: ["/", "/admin", "/api", "/.env", "/login"]
+      attack_type: scan_probe
+
+output:
+  labels_dir: data/raw/labels
+  pcaps_dir: data/raw/pcap
+  certs_dir: data/processed/certs
