@@ -111,27 +111,40 @@ def injection_heatmap(report: dict[str, Any], out: Path) -> Path | None:
 
 def evasion_curve(report: dict[str, Any], out: Path) -> Path | None:
     curve = (report.get("evasion") or {}).get("curve") or []
-    if len(curve) < 2:
-        return None
     series = [
         ("ml_evasion_in_training", "ML, evasion in training"),
         ("ml_zero_day", "ML, zero-day"),
         ("agent", "Agent"),
         ("ensemble_or_flag", "Ensemble (or_flag)"),
     ]
-    fig, ax = _figure(7.2, 4.2)
-    xs_all = [row["strength"] for row in curve]
+    # A line needs two reportable points; withheld rates are never drawn (see experiments.py).
+    lines = []
     for idx, (key, label) in enumerate(series):
         points = [
             (row["strength"], row[key]["asr"]) for row in curve
             if (row.get(key) or {}).get("asr") is not None
         ]
-        if not points:
-            continue
+        if len(points) >= 2:
+            lines.append((idx, label, points))
+    if not lines:
+        return None
+
+    fig, ax = _figure(7.2, 4.2)
+    xs_all = [row["strength"] for row in curve]
+    end_labels: list[tuple[float, float, str]] = []
+    for idx, label, points in lines:
         xs, ys = zip(*points, strict=True)
         ax.plot(xs, ys, color=SERIES[idx], linewidth=2, marker=MARKERS[idx], markersize=6,
                 markeredgecolor=SURFACE, markeredgewidth=1.5, label=label)
-        ax.annotate(label, (xs[-1], ys[-1]), xytext=(8, 0), textcoords="offset points",
+        end_labels.append((xs[-1], ys[-1], label))
+    # Direct end labels, nudged apart so coincident endpoints stay readable.
+    placed: list[float] = []
+    for x, y, label in sorted(end_labels, key=lambda t: t[1]):
+        y_text = y
+        while any(abs(y_text - p) < 0.06 for p in placed):
+            y_text += 0.06
+        placed.append(y_text)
+        ax.annotate(label, (x, y), xytext=(x + 0.03, y_text), textcoords="data",
                     va="center", fontsize=8.5, color=TEXT_PRIMARY)
     ax.set_xlim(min(xs_all) - 0.03, max(xs_all) + 0.35)
     ax.set_ylim(-0.03, 1.05)
@@ -146,6 +159,8 @@ def evasion_curve(report: dict[str, Any], out: Path) -> Path | None:
 def _hbar(
     names: list[str], values: list[float], labels: list[str], out: Path, title: str, subtitle: str,
     xlabel: str,
+    *,
+    share: bool = False,
 ) -> Path:
     fig, ax = _figure(7.2, 1.2 + 0.42 * len(names))
     ax.grid(True, axis="x", color=GRID, linewidth=0.8)
@@ -156,7 +171,8 @@ def _hbar(
     ax.set_yticks(range(len(names)), names, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlabel(xlabel, color=TEXT_SECONDARY, fontsize=9)
-    ax.set_xlim(0, max(values + [1e-9]) * 1.25)
+    # A share always spans 0–1, so an all-zero result reads as zero, not as a 1e-9 scale.
+    ax.set_xlim(0, 1.0 if share else max(values + [1e-9]) * 1.25)
     _title(ax, title, subtitle)
     return _save(fig, out)
 
@@ -174,7 +190,8 @@ def false_alarm_bars(report: dict[str, Any], out: Path) -> Path | None:
     ]
     return _hbar(names, values, labels, out, "False alarms on honest cleared benign flows",
                  f"{fa.get('honest_cleared_flows', 0)} benign test flows the agent correctly "
-                 "cleared; share each defense wrongly overrides.", "False-alarm share")
+                 "cleared; share each defense wrongly overrides.", "False-alarm share",
+                 share=True)
 
 
 def latency_bars(report: dict[str, Any], out: Path) -> Path | None:
