@@ -237,4 +237,7 @@ def label_to_ground_truth(label: FlowLabelRecord) -> dict[str, Any]:
         "dst_sni_expected": label.dst_sni,
         "label_started_at": label.started_at.astimezone(timezone.utc).isoformat(),
         "label_ended_at": label.ended_at.isoformat() if label.ended_at else None,
+        "run_id": label.run_id,
+        "evasion_strength": label.evasion_strength,
+        "evasion_variant": label.evasion_variant,
     }

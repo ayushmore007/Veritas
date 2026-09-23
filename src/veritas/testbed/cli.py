@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from veritas.attacks.evasion import EvasionProfile
 from veritas.capture.pcap_record import PcapRecorder
 from veritas.testbed.config import load_testbed_config, project_root, resolve_path
 from veritas.testbed.labels import FlowLabelRecord, LabelRegistry
@@ -20,6 +21,38 @@ from veritas.testbed.server import run_server_process
 
 #: Written next to the PCAPs; `veritas-capture process --manifest` reads it.
 RUNS_MANIFEST_NAME = "runs_manifest.json"
+
+
+def _update_manifest(path: Path, new_runs: list[dict], labels_file: str, *, fresh: bool) -> None:
+    """
+    Add this invocation's runs to the manifest instead of replacing it.
+
+    A corpus is built from several `generate` calls (clean runs, then evasion runs per strength),
+    and the label file they share is append-only. A run whose PCAP path is reused (the single-run
+    default `phase1.pcapng`) replaces the older entry, since that capture no longer exists.
+    """
+    runs: list[dict] = []
+    if path.is_file() and not fresh:
+        try:
+            runs = json.loads(path.read_text(encoding="utf-8")).get("runs", [])
+        except (json.JSONDecodeError, OSError):
+            runs = []
+    new_pcaps = {r["pcap"] for r in new_runs if r.get("pcap")}
+    new_ids = {r["run_id"] for r in new_runs}
+    runs = [r for r in runs if r.get("run_id") not in new_ids and r.get("pcap") not in new_pcaps]
+    runs.extend(new_runs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "labels_file": labels_file,
+                "runs": runs,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
@@ -33,6 +66,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 2
     if args.pcap_out and args.runs > 1:
         print("--pcap-out names one file; it cannot be used with --runs > 1", file=sys.stderr)
+        return 2
+
+    scenarios = (
+        {x.strip() for x in args.scenarios.split(",") if x.strip()} if args.scenarios else None
+    )
+    if args.evasion_variant and not args.evasion_strength:
+        print("--evasion-variant needs --evasion-strength > 0", file=sys.stderr)
         return 2
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -57,9 +97,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             recorder.start()
             time.sleep(1.5)  # let the capture attach before the first QUIC packets
 
+        evasion = EvasionProfile(
+            strength=args.evasion_strength,
+            variant=args.evasion_variant or (
+                f"baseline_{args.evasion_strength:g}" if args.evasion_strength else None
+            ),
+            seed=run_seed if run_seed is not None else i,
+        )
+
         result: dict = {}
         try:
-            result = asyncio.run(orch.run(run_id=run_id, seed=run_seed))
+            result = asyncio.run(
+                orch.run(run_id=run_id, seed=run_seed, scenarios=scenarios, evasion=evasion)
+            )
         finally:
             if recorder is not None and pcap_out is not None:
                 result["pcap_file"] = str(pcap_out)
@@ -74,6 +124,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 "pcap_packets": result.get("pcap_packets"),
                 "flow_ids": [r["flow_id"] for r in result.get("records", [])],
                 "scenario_params": result.get("scenario_params"),
+                "evasion": result.get("evasion"),
             }
         )
         print(
@@ -83,19 +134,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         )
 
     manifest_path = pcaps_dir / RUNS_MANIFEST_NAME
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "seed": args.seed,
-                "runs": manifest_runs,
-                "labels_file": results[-1]["labels_file"],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    _update_manifest(manifest_path, manifest_runs, results[-1]["labels_file"], fresh=args.new_manifest)
 
     if args.runs == 1:
         print(json.dumps(results[0], indent=2))
@@ -198,6 +237,27 @@ def main() -> None:
         "--seed",
         type=int,
         help="Vary scenario parameters per run, reproducibly (default: use config values as-is)",
+    )
+    gen.add_argument(
+        "--scenarios",
+        help="Comma-separated scenario ids to run (default: all). "
+        "browse,stream,c2_beacon,scan_probe,data_exfil",
+    )
+    gen.add_argument(
+        "--evasion-strength",
+        type=float,
+        default=0.0,
+        help="Phase 6: reshape malicious traffic, 0.0 (clean) to 1.0 (benign traffic untouched)",
+    )
+    gen.add_argument(
+        "--evasion-variant",
+        help="Knob set: timing_only | volume_only | chunk_only | cover_only enable one knob "
+        "(held out); any other name, e.g. baseline_0.75, enables all four",
+    )
+    gen.add_argument(
+        "--new-manifest",
+        action="store_true",
+        help="Start a new runs manifest instead of adding to the existing one",
     )
     gen.set_defaults(func=_cmd_generate)
 

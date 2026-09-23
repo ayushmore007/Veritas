@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from veritas.attacks.evasion import EvasionProfile
 from veritas.testbed.certs import ensure_testbed_certs
 from veritas.testbed.client import HttpSession
 from veritas.testbed.config import load_testbed_config, project_root, resolve_path
@@ -111,101 +112,69 @@ class LabOrchestrator:
         ca_path: Path,
         scenario_cfg: dict[str, Any] | None = None,
         registry: LabelRegistry | _RunTaggingRegistry | None = None,
+        scenarios: set[str] | None = None,
+        evasion: EvasionProfile | None = None,
     ) -> list[FlowLabelRecord]:
-        records: list[FlowLabelRecord] = []
+        """
+        Run each scenario on its own QUIC connection, in a fixed order.
+
+        `scenarios` restricts which ones run (default: all). `evasion` reshapes the malicious
+        scenarios only; benign traffic is the control arm and is never reshaped.
+        """
         hosts = self.config["hosts"]
         scenario_cfg = scenario_cfg or self.config["scenarios"]
         registry = registry or self.registry
+        benign_cfg = {s["id"]: s for s in scenario_cfg["benign"]}
+        mal_cfg = {s["id"]: s for s in scenario_cfg["malicious"]}
 
-        benign_host = hosts["benign_server"]
-        browse_cfg = scenario_cfg["benign"][0]
-        async with HttpSession(
-            host=benign_host["localhost_bind"],
-            port=benign_host["port"],
-            sni=benign_host["sni"],
-            ca_path=str(ca_path),
-        ) as session:
-            records.append(
-                await benign.run_browse(
-                    session,
-                    dst_host="benign_server",
-                    repetitions=browse_cfg["repetitions"],
-                    registry=registry,
-                )
-            )
-        stream_cfg = scenario_cfg["benign"][1]
-        async with HttpSession(
-            host=benign_host["localhost_bind"],
-            port=benign_host["port"],
-            sni=benign_host["sni"],
-            ca_path=str(ca_path),
-        ) as session:
-            records.append(
-                await benign.run_stream(
-                    session,
-                    dst_host="benign_server",
-                    chunk_kb=stream_cfg["chunk_kb"],
-                    repetitions=stream_cfg["repetitions"],
-                    registry=registry,
-                )
-            )
+        plan = [
+            ("browse", "benign_server", lambda session: benign.run_browse(
+                session, dst_host="benign_server",
+                repetitions=benign_cfg["browse"]["repetitions"], registry=registry)),
+            ("stream", "benign_server", lambda session: benign.run_stream(
+                session, dst_host="benign_server", chunk_kb=benign_cfg["stream"]["chunk_kb"],
+                repetitions=benign_cfg["stream"]["repetitions"], registry=registry)),
+            ("c2_beacon", "malicious_c2", lambda session: malicious.run_c2_beacon(
+                session, dst_host="malicious_c2", interval_sec=mal_cfg["c2_beacon"]["interval_sec"],
+                repetitions=mal_cfg["c2_beacon"]["repetitions"], registry=registry,
+                evasion=evasion)),
+            ("scan_probe", "malicious_c2", lambda session: malicious.run_scan_probe(
+                session, dst_host="malicious_c2", paths=mal_cfg["scan_probe"]["paths"],
+                registry=registry, evasion=evasion)),
+            ("data_exfil", "malicious_exfil", lambda session: malicious.run_data_exfil(
+                session, dst_host="malicious_exfil", upload_kb=mal_cfg["data_exfil"]["upload_kb"],
+                registry=registry, evasion=evasion)),
+        ]
+        unknown = (scenarios or set()) - {sid for sid, _, _ in plan}
+        if unknown:
+            raise ValueError(f"Unknown scenarios: {sorted(unknown)}")
 
-        c2_host = hosts["malicious_c2"]
-        c2_cfg = next(s for s in scenario_cfg["malicious"] if s["id"] == "c2_beacon")
-        async with HttpSession(
-            host=c2_host["localhost_bind"],
-            port=c2_host["port"],
-            sni=c2_host["sni"],
-            ca_path=str(ca_path),
-        ) as session:
-            records.append(
-                await malicious.run_c2_beacon(
-                    session,
-                    dst_host="malicious_c2",
-                    interval_sec=c2_cfg["interval_sec"],
-                    repetitions=c2_cfg["repetitions"],
-                    registry=registry,
-                )
-            )
-        scan_cfg = next(s for s in scenario_cfg["malicious"] if s["id"] == "scan_probe")
-        async with HttpSession(
-            host=c2_host["localhost_bind"],
-            port=c2_host["port"],
-            sni=c2_host["sni"],
-            ca_path=str(ca_path),
-        ) as session:
-            records.append(
-                await malicious.run_scan_probe(
-                    session,
-                    dst_host="malicious_c2",
-                    paths=scan_cfg["paths"],
-                    registry=registry,
-                )
-            )
-
-        exfil_host = hosts["malicious_exfil"]
-        exfil_cfg = next(s for s in scenario_cfg["malicious"] if s["id"] == "data_exfil")
-        async with HttpSession(
-            host=exfil_host["localhost_bind"],
-            port=exfil_host["port"],
-            sni=exfil_host["sni"],
-            ca_path=str(ca_path),
-        ) as session:
-            records.append(
-                await malicious.run_data_exfil(
-                    session,
-                    dst_host="malicious_exfil",
-                    upload_kb=exfil_cfg["upload_kb"],
-                    registry=registry,
-                )
-            )
-
+        records: list[FlowLabelRecord] = []
+        for scenario_id, host_name, run_scenario in plan:
+            if scenarios is not None and scenario_id not in scenarios:
+                continue
+            host = hosts[host_name]
+            async with HttpSession(
+                host=host["localhost_bind"],
+                port=host["port"],
+                sni=host["sni"],
+                ca_path=str(ca_path),
+            ) as session:
+                records.append(await run_scenario(session))
         return records
 
-    async def run(self, *, run_id: str | None = None, seed: int | None = None) -> dict:
+    async def run(
+        self,
+        *,
+        run_id: str | None = None,
+        seed: int | None = None,
+        scenarios: set[str] | None = None,
+        evasion: EvasionProfile | None = None,
+    ) -> dict:
         """
         One generation run. With a `seed`, scenario parameters are drawn per run (see
-        `vary_scenarios`); without one the configured values are used verbatim.
+        `vary_scenarios`); without one the configured values are used verbatim. `evasion`
+        reshapes the malicious scenarios (Phase 6).
         """
         cert, key = self.ensure_certs()
         ca_path = self.certs_dir / "ca.crt"
@@ -220,6 +189,8 @@ class LabOrchestrator:
                 ca_path=ca_path,
                 scenario_cfg=scenario_cfg,
                 registry=_RunTaggingRegistry(self.registry, run_id),
+                scenarios=scenarios,
+                evasion=evasion,
             )
         finally:
             await self.stop_servers(servers)
@@ -231,6 +202,7 @@ class LabOrchestrator:
             "labels_file": str(self.labels_path),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "scenario_params": scenario_cfg,
+            "evasion": evasion.describe() if evasion else None,
             "summary": summary,
             "records": [r.model_dump(mode="json") for r in records],
         }

@@ -14,7 +14,17 @@ from veritas.features import behavioural_features
 
 #: Bookkeeping and label columns in the modelling frame. Everything else is a feature.
 NON_FEATURE_COLUMNS: frozenset[str] = frozenset(
-    {"flow_id", "capture_id", "scenario_id", "traffic_class", "attack_type", "label"}
+    {
+        "flow_id",
+        "capture_id",
+        "scenario_id",
+        "traffic_class",
+        "attack_type",
+        "label",
+        # Phase 6 ground truth: how the generator reshaped the flow. A label, never a feature.
+        "evasion_strength",
+        "evasion_variant",
+    }
 )
 
 
@@ -39,6 +49,8 @@ def records_to_frame(records: list[EnrichedFlowRecord]) -> pd.DataFrame:
         row["traffic_class"] = rec.ground_truth.get("traffic_class")
         row["attack_type"] = _label_attack_type(rec)
         row["label"] = _label_binary(rec)
+        row["evasion_strength"] = float(rec.ground_truth.get("evasion_strength") or 0.0)
+        row["evasion_variant"] = rec.ground_truth.get("evasion_variant")
         rows.append(row)
     if not rows:
         return pd.DataFrame()

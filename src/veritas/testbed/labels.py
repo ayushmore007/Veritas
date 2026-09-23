@@ -50,6 +50,11 @@ class FlowLabelRecord(BaseModel):
     # which is the grouping unit for train/test splits. None for labels from older runs.
     run_id: str | None = None
 
+    # Phase 6: how strongly the generator reshaped this flow to evade detection (0 = clean), and
+    # which knob set did it. Benign flows are never reshaped.
+    evasion_strength: float = 0.0
+    evasion_variant: str | None = None
+
     def finalize(
         self,
         *,

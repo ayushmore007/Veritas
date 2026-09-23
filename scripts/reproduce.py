@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end reproduction driver for Veritas.
 
-Runs implemented pipeline stages in dependency order. Phases 6–8 (attacks, defense) are not yet
-implemented in code; Phase 9 uses ``veritas-eval run`` which validates or reuses
-``data/processed/eval/phase9_report.json`` until live experiments land.
+Runs every pipeline stage in dependency order, ending with the live Phase 9 experiments
+(``veritas-eval run``) and figures. Evasion experiments need evaded runs in the corpus — see
+``--evasion-strengths`` / ``--held-out-variants``.
 
 Examples::
 
@@ -11,6 +11,8 @@ Examples::
     python scripts/reproduce.py --provider ollama
     python scripts/reproduce.py --skip-generate
     python scripts/reproduce.py --runs 60 --seed 1 --entropy   # multi-capture corpus
+    python scripts/reproduce.py --runs 12 --seed 1 --evasion-strengths 0.25,0.5,0.75,1 \
+        --held-out-variants timing_only,volume_only,chunk_only,cover_only
 """
 
 from __future__ import annotations
@@ -66,17 +68,37 @@ def run_pipeline(args: argparse.Namespace) -> int:
     agent = _agent_flags(provider)
 
     if not args.skip_generate:
-        gen_argv = ["-m", "veritas.testbed.cli", "generate", "--record-pcap", "--runs", str(args.runs)]
+        gen_argv = [
+            "-m", "veritas.testbed.cli", "generate", "--record-pcap", "--new-manifest",
+            "--runs", str(args.runs),
+        ]
         if args.seed is not None:
             gen_argv += ["--seed", str(args.seed)]
         _run("Phase 1 — testbed", gen_argv)
+
+        # Phase 6: evaded runs of the malicious scenarios only (benign is the control arm).
+        malicious = "c2_beacon,scan_probe,data_exfil"
+        evasion_jobs = [(float(x), None) for x in args.evasion_strengths.split(",") if x.strip()]
+        evasion_jobs += [(0.75, v) for v in args.held_out_variants.split(",") if v.strip()]
+        for strength, variant in evasion_jobs:
+            ev_argv = [
+                "-m", "veritas.testbed.cli", "generate", "--record-pcap",
+                "--runs", str(args.evasion_runs), "--scenarios", malicious,
+                "--evasion-strength", str(strength),
+            ]
+            if variant:
+                ev_argv += ["--evasion-variant", variant]
+            if args.seed is not None:
+                ev_argv += ["--seed", str(args.seed + int(strength * 1000) + len(variant or ""))]
+            _run(f"Phase 6 — evasion {variant or 'baseline'} @ {strength}", ev_argv)
         # Re-capture assigns new flow_ids; split must be rebuilt before any held-out scoring.
         args.force_split = True
     else:
         print("\n[Phase 1] skipped (--skip-generate)")
 
     capture_argv = ["-m", "veritas.capture.cli", "process"]
-    if args.runs > 1 or args.manifest:
+    evading = bool(args.evasion_strengths or args.held_out_variants) and not args.skip_generate
+    if args.runs > 1 or args.manifest or evading:
         capture_argv.append("--manifest")
     if args.entropy:
         capture_argv.append("--entropy")
@@ -112,24 +134,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
     if not args.quick:
         _run("Phase 5 — agent vs ML compare", ["-m", "veritas.baselines.cli", "compare"])
 
-    eval_argv = ["-m", "veritas.eval.cli", "--provider", provider, "run"]
-    if args.require_live_eval:
-        eval_argv.append("--require-live")
-    if REPORT_PATH.is_file() or args.require_live_eval:
-        _run("Phase 9 — evaluation", eval_argv)
-        if not args.quick:
-            _run(
-                "Phase 10 — figures",
-                ["-m", "veritas.eval.cli", "--provider", provider, "figures"],
-            )
-    else:
-        # data/ is gitignored, so a fresh clone never has the saved report. That is a missing
-        # artifact, not a pipeline failure — say so instead of exiting non-zero after Phase 5.
-        print(
-            f"\n[Phase 9] skipped: no saved report at {REPORT_PATH}. Live Phase 6–8 experiments "
-            "are not in this repository yet; place a full-corpus phase9_report.json there, or "
-            "pass --require-live-eval to make this a hard failure."
-        )
+    _run("Phase 9 — evaluation", ["-m", "veritas.eval.cli", "--provider", provider, "run"])
+    if not args.quick:
+        _run("Phase 10 — figures", ["-m", "veritas.eval.cli", "figures"])
 
     print("\nReproduction finished.")
     print(f"  Agent provider: {provider}")
@@ -184,6 +191,23 @@ def main() -> int:
         help="With --skip-generate: re-process every run in runs_manifest.json",
     )
     parser.add_argument(
+        "--evasion-strengths",
+        default="",
+        help="Phase 6: comma-separated strengths to generate evaded runs at, e.g. 0.25,0.5,0.75,1",
+    )
+    parser.add_argument(
+        "--evasion-runs",
+        type=int,
+        default=2,
+        help="Evaded runs per strength / variant (default: 2)",
+    )
+    parser.add_argument(
+        "--held-out-variants",
+        default="",
+        help="Held-out single-knob variants at strength 0.75, "
+        "e.g. timing_only,volume_only,chunk_only,cover_only",
+    )
+    parser.add_argument(
         "--entropy",
         action="store_true",
         help="Add Phase 8c packet-level entropy features during capture",
@@ -192,11 +216,6 @@ def main() -> int:
         "--force-split",
         action="store_true",
         help="Re-roll train/val/test split (invalidates held-out comparisons)",
-    )
-    parser.add_argument(
-        "--require-live-eval",
-        action="store_true",
-        help="Fail if Phase 9 cannot run live experiments (no cached report fallback)",
     )
     args = parser.parse_args()
     return run_pipeline(args)
