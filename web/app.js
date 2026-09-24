@@ -561,7 +561,11 @@ function renderActiveServer() {
   document.getElementById('targetHostTitle').textContent = srv.host;
   document.getElementById('targetSubtitle').textContent = srv.roleDescription || `Inspected Node: ${srv.host}`;
   document.getElementById('telBind').textContent = `${srv.ip}:${srv.port}`;
-  document.getElementById('telProto').textContent = srv.protocol || 'QUIC / TLS 1.3';
+  document.getElementById('telProto').textContent = srv.protocol || '—';
+  // Negotiated cipher from the scan itself; a plain-HTTP target has none.
+  const meta = srv.metadataUntrusted || {};
+  document.getElementById('telCipher').textContent = meta.cipher || 'No TLS negotiated';
+  document.getElementById('testCountBadge').textContent = `${(srv.tests || []).length} Tests`;
   
   const tf = srv.twinFeatures || {};
   document.getElementById('telFlows').textContent =
