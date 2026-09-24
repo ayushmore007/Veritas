@@ -49,7 +49,8 @@ with the attack — which is why `experiment_evasion` trains and reports both.
 | `cover_requests` | interleave ordinary page fetches | request mix, duration | `scan_probe` |
 
 `--evasion-strength` runs 0.0 → 1.0, so Phase 9 reports ASR as a **curve** rather than a single
-number. Held-out variants (`timing_only`, `volume_only`, `chunk_only`, `cover_only`) enable exactly
+number. Knob arithmetic lives in `src/veritas/attacks/evasion.py`; each evaded run is appended to
+`runs_manifest.json`, so follow a batch of evaded runs with `veritas-capture process --manifest`. Held-out variants (`timing_only`, `volume_only`, `chunk_only`, `cover_only`) enable exactly
 one knob each; they are never used while designing the defense, so Phase 9 can test whether a
 defense generalised or memorised.
 

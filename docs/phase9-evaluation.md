@@ -11,6 +11,13 @@ veritas-eval figures                  # render figures from the saved report
 
 Output: `data/processed/eval/phase9_report.json` and `data/processed/eval/figures/`.
 
+Implementation: `src/veritas/eval/experiments.py` (runners) and `src/veritas/eval/figures.py`.
+`--only` accepts a comma-separated subset and merges it into the saved report; `--max-flows N`
+caps flows per experiment for slow providers; `--cached` validates a saved report without running.
+The evasion and generalization experiments need evaded runs in the corpus — generate them with
+`--evasion-strength` / `--evasion-variant` (see Phase 6), or use `scripts/reproduce.py
+--evasion-strengths … --held-out-variants …`.
+
 ## The eight experiments
 
 | # | Experiment | Question it answers |
@@ -25,6 +32,8 @@ Output: `data/processed/eval/phase9_report.json` and `data/processed/eval/figure
 | — | `ensemble` | Does combining the detectors beat either alone, and at what FPR? |
 
 ## Measured results (620 flows, 122-flow test split, deterministic provider)
+
+*The author's run; `veritas-eval run` regenerates every cell from your own corpus.*
 
 | Attack | Undefended | 8a sanitizer | Consistency (prior art) | 8b provenance | 8b + replay | Twin ablated |
 |---|---|---|---|---|---|---|

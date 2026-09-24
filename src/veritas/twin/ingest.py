@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from veritas.capture.records import EnrichedFlowRecord, EnrichedFlowRegistry
+from veritas.features import behavioural_features
 from veritas.twin.store import TwinStore
 
 
@@ -22,6 +23,16 @@ def extract_measured_features(record: EnrichedFlowRecord) -> dict[str, Any]:
     measured["dst_port"] = record.dst_port
     measured["protocol"] = record.protocol
     return measured
+
+
+def modelling_features(measured: dict[str, Any]) -> dict[str, Any]:
+    """
+    Decision/modelling view of a measured record: identity and provenance fields removed.
+
+    The twin keeps `dst_port` and friends because replay and host history need them; in this
+    testbed they also encode the label, so nothing that models or decides may see them.
+    """
+    return behavioural_features(measured)
 
 
 def ingest_features_file(

@@ -3,17 +3,89 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import ssl
 from collections import deque
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 
-from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h3.connection import H3_ALPN, H3Connection
 from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import QuicEvent
+
+#: Upper bound on one request/response round trip. Without it a lost response hangs the run.
+REQUEST_TIMEOUT_SEC = 30.0
+
+
+def _ipv6_available() -> bool:
+    if not socket.has_ipv6:
+        return False
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind(("::", 0, 0, 0))
+        return True
+    except OSError:
+        return False
+
+
+@asynccontextmanager
+async def connect(
+    host: str,
+    port: int,
+    *,
+    configuration: QuicConfiguration,
+    create_protocol: type[QuicConnectionProtocol],
+) -> AsyncIterator[QuicConnectionProtocol]:
+    """
+    Same contract as `aioquic.asyncio.client.connect`, minus its hard IPv6 requirement.
+
+    aioquic always opens an AF_INET6 dual-stack socket, which fails with EAFNOSUPPORT in containers
+    and VMs that have IPv6 disabled — including the default Docker bridge used by this testbed.
+    Here the socket family follows what the host actually supports.
+    """
+    loop = asyncio.get_running_loop()
+    use_v6 = _ipv6_available()
+    family = socket.AF_UNSPEC if use_v6 else socket.AF_INET
+    infos = await loop.getaddrinfo(host, port, family=family, type=socket.SOCK_DGRAM)
+    addr = infos[0][4]
+
+    if use_v6:
+        if len(addr) == 2:
+            addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind(("::", 0, 0, 0))
+        except OSError:
+            sock.close()
+            raise
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("0.0.0.0", 0))
+        except OSError:
+            sock.close()
+            raise
+
+    if configuration.server_name is None:
+        configuration.server_name = host
+    connection = QuicConnection(configuration=configuration)
+    transport, protocol = await loop.create_datagram_endpoint(
+        lambda: create_protocol(connection), sock=sock
+    )
+    try:
+        protocol.connect(addr)
+        await protocol.wait_connected()
+        yield protocol
+    finally:
+        protocol.close()
+        await protocol.wait_closed()
+        transport.close()
 
 
 @dataclass
@@ -97,7 +169,11 @@ class QuicClientProtocol(QuicConnectionProtocol):
         self._waiters[stream_id] = waiter
         self.transmit()
 
-        events = await waiter
+        try:
+            events = await asyncio.wait_for(waiter, timeout=REQUEST_TIMEOUT_SEC)
+        finally:
+            self._waiters.pop(stream_id, None)
+            self._events.pop(stream_id, None)
         received = b""
         for ev in events:
             if isinstance(ev, DataReceived):
@@ -107,20 +183,17 @@ class QuicClientProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event: QuicEvent) -> None:
         for http_event in self._http.handle_event(event):
-            if isinstance(http_event, HeadersReceived):
-                sid = http_event.stream_id
-                if sid in self._events:
-                    self._events[sid].append(http_event)
-                    if http_event.stream_ended:
-                        waiter = self._waiters.pop(sid)
-                        waiter.set_result(self._events.pop(sid))
-            elif isinstance(http_event, DataReceived):
-                sid = http_event.stream_id
-                if sid in self._events:
-                    self._events[sid].append(http_event)
-                    if http_event.stream_ended:
-                        waiter = self._waiters.pop(sid)
-                        waiter.set_result(self._events.pop(sid))
+            if not isinstance(http_event, (HeadersReceived, DataReceived)):
+                continue
+            sid = http_event.stream_id
+            if sid not in self._events:
+                continue
+            self._events[sid].append(http_event)
+            if http_event.stream_ended:
+                waiter = self._waiters.pop(sid, None)
+                events = self._events.pop(sid)
+                if waiter is not None and not waiter.done():
+                    waiter.set_result(events)
 
 
 def build_url(host: str, port: int, path: str) -> str:

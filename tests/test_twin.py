@@ -1,6 +1,5 @@
 """Digital twin Tier 1 tests."""
 
-import json
 from pathlib import Path
 
 from veritas.capture.records import EnrichedFlowRecord, EnrichedFlowRegistry

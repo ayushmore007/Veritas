@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import threading
+import sys
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,9 +26,7 @@ class PcapRecorder:
         self.output_path = output_path
         self.ports = ports
         self.interface = interface
-        self._packets: list = []
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
+        self._sniffer = None
         self._tshark_proc: subprocess.Popen | None = None
         self._backend = "none"
 
@@ -46,13 +45,17 @@ class PcapRecorder:
     def _start_tshark(self) -> bool:
         iface = self.interface
         if not iface:
-            for candidate in _LOOPBACK_IFACES:
-                iface = candidate
-                break
+            # Npcap loopback names only exist on Windows; Linux/WSL/macOS loopback is lo / lo0.
+            if sys.platform.startswith("win"):
+                iface = _LOOPBACK_IFACES[0]
+            elif sys.platform == "darwin":
+                iface = "lo0"
+            else:
+                iface = "lo"
         cmd = [
             "tshark",
             "-i",
-            iface or "1",
+            iface,
             "-f",
             self.bpf_filter,
             "-w",
@@ -64,33 +67,44 @@ class PcapRecorder:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            self._backend = "tshark"
-            logger.info("Recording PCAP via tshark (%s) -> %s", iface, self.output_path)
-            return True
         except OSError:
             self._tshark_proc = None
             return False
 
+        # tshark exits almost immediately on a bad interface or missing capture permission;
+        # Popen succeeding does not mean capture started.
+        time.sleep(0.5)
+        if self._tshark_proc.poll() is not None:
+            err = (self._tshark_proc.stderr.read() if self._tshark_proc.stderr else b"") or b""
+            logger.warning(
+                "tshark exited on %s (%s); falling back to scapy",
+                iface,
+                err.decode(errors="replace").strip()[:300],
+            )
+            self._tshark_proc = None
+            return False
+
+        self._backend = "tshark"
+        logger.info("Recording PCAP via tshark (%s) -> %s", iface, self.output_path)
+        return True
+
     def _start_scapy(self) -> None:
-        from scapy.all import sniff
+        from scapy.all import AsyncSniffer, conf
 
-        self._stop.clear()
-
-        def _run() -> None:
-            try:
-                sniff(
-                    filter=self.bpf_filter,
-                    prn=self._packets.append,
-                    store=False,
-                    stop_filter=lambda _: self._stop.is_set(),
-                )
-            except Exception:
-                logger.exception("scapy sniff failed — try tshark or manual capture")
-
-        self._thread = threading.Thread(target=_run, name="pcap-recorder", daemon=True)
-        self._thread.start()
+        # The testbed talks over 127.0.0.1. Without an explicit iface scapy sniffs the
+        # default-route interface and records nothing.
+        iface = self.interface or conf.loopback_name
+        # AsyncSniffer can be stopped without waiting for another packet to arrive; a plain
+        # sniff(stop_filter=...) thread outlives the run and keeps capturing into the next one.
+        self._sniffer = AsyncSniffer(iface=iface, filter=self.bpf_filter, store=True)
+        try:
+            self._sniffer.start()
+        except Exception:
+            logger.exception("scapy sniff failed — try tshark or manual capture")
+            self._sniffer = None
+            return
         self._backend = "scapy"
-        logger.info("Recording PCAP via scapy filter=%s", self.bpf_filter)
+        logger.info("Recording PCAP via scapy on %s filter=%s", iface, self.bpf_filter)
 
     def stop(self) -> int:
         if self._backend == "tshark" and self._tshark_proc is not None:
@@ -102,18 +116,25 @@ class PcapRecorder:
             if self.output_path.is_file():
                 size = self.output_path.stat().st_size
                 logger.info("tshark wrote %s (%d bytes)", self.output_path, size)
+                self._backend = "none"
                 return max(1, size // 500)  # rough packet estimate for display
+            self._backend = "none"
             return 0
 
         if self._backend == "scapy":
             from scapy.all import wrpcap
 
-            self._stop.set()
-            if self._thread is not None:
-                self._thread.join(timeout=8.0)
-            count = len(self._packets)
+            packets = []
+            if self._sniffer is not None:
+                try:
+                    packets = list(self._sniffer.stop() or [])
+                except Exception:
+                    logger.exception("scapy sniffer did not stop cleanly")
+                self._sniffer = None
+            self._backend = "none"
+            count = len(packets)
             if count:
-                wrpcap(str(self.output_path), self._packets)
+                wrpcap(str(self.output_path), packets)
                 logger.info("Wrote %d packets to %s", count, self.output_path)
             else:
                 logger.warning("No packets captured")

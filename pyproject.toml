@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veritas"
+version = "0.1.0"
+description = "Explainable AI defense for encrypted QUIC traffic (lab testbed only)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "scapy>=2.5",
+    "aioquic>=1.0",
+    "cicflowmeter>=0.1.9",
+    "shap>=0.43",
+    "lime>=0.2",
+    "httpx>=0.27",
+    "matplotlib>=3.8",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.1"]
+demo = ["streamlit>=1.30"]
+
+[project.scripts]
+veritas-testbed = "veritas.testbed.cli:main"
+veritas-capture = "veritas.capture.cli:main"
+veritas-twin = "veritas.twin.cli:main"
+veritas-agent = "veritas.agent.cli:main"
+veritas-baseline = "veritas.baselines.cli:main"
+veritas-eval = "veritas.eval.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+markers = [
+    "slow: end-to-end or heavyweight tests (network sockets, SHAP)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

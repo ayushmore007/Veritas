@@ -53,9 +53,12 @@ Mininet is Linux-native. Use **WSL2 (Ubuntu)** or **Docker** for Phases 1+ testb
 Launch the interactive **Veritas Sentinel Security Dashboard**:
 
 ```bash
-python web/server.py
+python web/server.py            # listens on 127.0.0.1:8000
 ```
-*(Or open [`web/index.html`](file:///d:/Veritas/web/index.html) directly in your browser)*
+
+The scanner probes whatever host you give it, so the server binds to loopback and rejects
+cross-origin API calls. Use `--host` only on a network you control. Live scans are recorded in
+`data/processed/twin/live_scans.db`, never in the research twin (`twin.db`).
 
 - **Server Identification**: Inspect target nodes (`cdn-edge-3`, `api-sync-7`, `backup-01`, or custom endpoints).
 - **Security Test Battery**: 7 in-depth tests (QUIC handshake, C2 beaconing, Exfiltration entropy, Metadata prompt injection, ML evasion, Twin replay).
@@ -68,26 +71,42 @@ python web/server.py
 python scripts/reproduce.py --quick              # smoke: Phases 1–5 + agent (~5 flows)
 python scripts/reproduce.py --skip-generate      # reuse existing PCAP/labels
 python scripts/reproduce.py --provider ollama    # real local model for agent steps
+python scripts/reproduce.py --runs 60 --seed 1 --entropy   # multi-capture corpus
 ```
 
-Full-corpus regeneration (620 flows, ~50 min) requires multi-run testbed support that is not
-wired yet. Until then, Phase 9 paper numbers come from the saved report at
-`data/processed/eval/phase9_report.json` (validated by `veritas-eval run`).
+```bash
+# Full evaluation corpus: clean runs, Phase 6 evaded runs per strength, held-out knob variants
+python scripts/reproduce.py --runs 25 --seed 1 --entropy \
+    --evasion-strengths 0.25,0.5,0.75,1 --held-out-variants timing_only,volume_only,chunk_only,cover_only
+```
+
+Each `--runs` run is its own capture (own PCAP and `run_id`), which is what the train/test split
+groups on; `--seed` varies scenario parameters per run, reproducibly. Phase 9 runs live:
+`veritas-eval run` executes every experiment (detection, evasion, injection with each defense
+layer and the twin ablation, false alarms, generalization, latency, ensemble) and writes
+`data/processed/eval/phase9_report.json`; `veritas-eval run --cached` only validates a saved one.
 
 ## Pipeline, stage by stage
 
 ```powershell
 veritas-testbed generate --runs 60 --seed 1 --record-pcap   # Phase 1: labeled QUIC flows + PCAPs
-veritas-capture process --manifest --entropy                # Phase 2 + 8c: features + entropy
+veritas-capture process --manifest --entropy                # Phase 2 + 8c: every run, + entropy
 veritas-twin ingest                                         # Phase 3: measured-feature oracle
 veritas-agent split                                         # fix the held-out test set once
 veritas-baseline train && veritas-baseline evaluate --split test   # Phase 5: ML baseline
+veritas-testbed generate --runs 12 --record-pcap --scenarios c2_beacon,scan_probe,data_exfil \
+    --evasion-strength 0.75                                 # Phase 6: evaded traffic (then re-capture)
 veritas-agent triage --all                                  # Phase 4: agent verdicts + traces
-veritas-eval run                                            # Phase 9: all experiments
+veritas-eval run                                            # Phase 9: all experiments, live
+veritas-eval run --only injection                           # one experiment, merged into the report
 veritas-eval figures                                        # Phase 10: figures
 ```
 
 ## Headline results
+
+*From the author's 620-flow run. Regenerate with the full-corpus command above and
+`veritas-eval --provider ollama run` before quoting; agent-side numbers from the deterministic
+stand-in demonstrate the mechanism and are not LLM measurements.*
 
 620 flows (200 benign / 420 malicious) across 180 runs; 122-flow held-out test split.
 
@@ -122,9 +141,10 @@ src/veritas/     Phase-aligned Python packages
   twin/          Phase 3 — Tier-1 digital twin oracle (measured features only)
   agent/         Phase 4 — IDS-Agent-style reason-act defender
   attacks/       Phases 6-7 — evasion profiles + injection payloads and campaign runner
-  defense/       Phase 8 — sanitizer, provenance verifier, consistency baseline, entropy, ensemble
+  defense/       Phase 8 — sanitizer, provenance verifier, consistency baseline, ensemble
+                 (8c entropy features live in capture/entropy.py)
   baselines/     Phase 5 — ML baseline, SHAP, faithfulness test
-  eval/          Phase 9 — splits, stability, experiments, figures
+  eval/          Phase 9 — splits, stability, live experiment runners, figures
 config/          YAML configuration and trust labels
 docs/            Plans, threat model, bibliography
 scripts/         Setup and license checks

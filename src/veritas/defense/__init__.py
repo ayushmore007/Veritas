@@ -1,6 +1,7 @@
 """Phase 8: sanitization, provenance verifier, consistency baseline, ensemble."""
 
 from veritas.defense.consistency import ConsistencyChecker, ConsistencyResult
+from veritas.defense.ensemble import EnsembleDecision, combine
 from veritas.defense.sanitizer import Sanitizer, SanitizeResult
 from veritas.defense.verifier import ClaimStatus, ClaimVerdict, ProvenanceVerifier, VerificationResult
 
@@ -9,8 +10,10 @@ __all__ = [
     "ClaimVerdict",
     "ConsistencyChecker",
     "ConsistencyResult",
+    "EnsembleDecision",
     "ProvenanceVerifier",
     "SanitizeResult",
     "Sanitizer",
     "VerificationResult",
+    "combine",
 ]

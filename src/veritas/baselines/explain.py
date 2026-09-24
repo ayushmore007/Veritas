@@ -24,11 +24,14 @@ def explain_with_shap(
     explainer = shap.TreeExplainer(clf)
     shap_values = explainer.shap_values(x_scaled)
 
-    # Binary: shap_values may be list [class0, class1] or array
+    # Binary classifiers: older shap returns [class0, class1]; newer returns an
+    # (n_samples, n_features, n_classes) array. Normalise to (n_samples, n_features) for class 1.
     if isinstance(shap_values, list):
-        values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+        values = np.asarray(shap_values[1] if len(shap_values) > 1 else shap_values[0])
     else:
-        values = shap_values
+        values = np.asarray(shap_values)
+        if values.ndim == 3:
+            values = values[:, :, 1] if values.shape[2] > 1 else values[:, :, 0]
 
     explanations: list[dict[str, Any]] = []
     for i in range(len(x)):

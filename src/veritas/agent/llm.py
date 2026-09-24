@@ -123,6 +123,16 @@ _INJECTION_PATTERNS = (
 )
 _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 
+# Operational framings a grounding-aware payload wraps around true measurements (Phase 7b).
+_BENIGN_FRAMING_RE = re.compile(
+    r"backup|nightly|scheduled|liveness|health|probe-interval|telemetry|metrics|compliance|"
+    r"audit|sweep|mirror|replica|sync|change-ticket|routine|quiet|profile=|window",
+    re.IGNORECASE,
+)
+_SECONDS_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)s(?![a-z])", re.IGNORECASE)
+_KB_RE = re.compile(r"(\d+)\s*kb", re.IGNORECASE)
+_PKTS_RE = re.compile(r"(?:pkts|samples)[=-](\d+)|(\d+)pkts", re.IGNORECASE)
+
 # SNI substrings that read as reassuring to a naive model.
 _BENIGN_SOUNDING = ("internal", "corp", "cdn", "update", "trusted", "benign", "microsoft", "google")
 
@@ -137,9 +147,14 @@ class DeterministicProvider:
         *,
         trust_metadata: bool = True,
         injection_susceptible: bool = True,
+        role_confusion: bool = True,
     ) -> None:
         self.name = "deterministic"
         self.model = "heuristic-v1"
+        # Phase 7b assumption: an undefended model that checks the numbers in a framed payload,
+        # finds them true, reports them as its own *measured* evidence (True) — or, in the honest
+        # condition, admits the framing came from untrusted metadata (False). Phase 9 runs both.
+        self.role_confusion = role_confusion
         # Both default True so the stand-in behaves like an *undefended* agent. Setting them False
         # does not model a defended agent — it models a different, metadata-blind one; the real
         # defense lives in Phase 8.
@@ -262,14 +277,59 @@ class DeterministicProvider:
 
     # -- metadata influence ----------------------------------------------
 
+    @staticmethod
+    def _grounded_framing(
+        blob: str, features: dict[str, Any]
+    ) -> list[tuple[str, float, float]]:
+        """
+        (field, stated, measured) for every number in a benign-framed string that checks out.
+
+        Empty unless the string carries an operational framing *and* at least one number that
+        matches the flow's measured features — the Phase 7b shape.
+        """
+        if not _BENIGN_FRAMING_RE.search(blob):
+            return []
+
+        def num(name: str) -> float:
+            try:
+                return float(features.get(name) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        duration, iat_max = num("flow_duration"), num("flow_iat_max")
+        total_kb = round((num("totlen_fwd_pkts") + num("totlen_bwd_pkts")) / 1024)
+        fwd_pkts = num("tot_fwd_pkts")
+
+        matches: list[tuple[str, float, float]] = []
+        for raw in _SECONDS_RE.findall(blob):
+            stated = float(raw)
+            if abs(stated - duration) <= max(0.15, 0.1 * duration):
+                matches.append(("flow_duration", stated, duration))
+            elif iat_max and abs(stated - min(duration, iat_max)) <= max(0.15, 0.1 * iat_max):
+                matches.append(("flow_iat_max", stated, iat_max))
+        for raw in _KB_RE.findall(blob):
+            if abs(int(raw) - total_kb) <= 1:
+                matches.append(("totlen_fwd_pkts", float(raw), num("totlen_fwd_pkts")))
+        for a, b in _PKTS_RE.findall(blob):
+            stated = float(a or b)
+            if fwd_pkts and stated == max(1.0, fwd_pkts):
+                matches.append(("tot_fwd_pkts", stated, fwd_pkts))
+        # One claim per field is enough for the verdict; keep the first match of each.
+        first: dict[str, tuple[str, float, float]] = {}
+        for match in matches:
+            first.setdefault(match[0], match)
+        return list(first.values())
+
     def _apply_metadata(
         self,
         verdict: Verdict,
         claims: list[dict[str, Any]],
         metadata: dict[str, Any],
+        features: dict[str, Any] | None = None,
     ) -> tuple[Verdict, list[dict[str, Any]], str | None]:
         """Model how an undefended agent lets untrusted strings move its verdict."""
         note: str | None = None
+        features = features or {}
         blob = " ".join(str(v) for v in metadata.values() if v is not None)
 
         if self.injection_susceptible and _INJECTION_RE.search(blob):
@@ -284,6 +344,27 @@ class DeterministicProvider:
                 }
             )
             return Verdict.IGNORE, claims, "metadata_instruction_followed"
+
+        grounded = self._grounded_framing(blob, features) if self.trust_metadata else []
+        if grounded:
+            for field, stated, actual in grounded:
+                claims.append(
+                    {
+                        "statement": (
+                            f"Measured {field} ({actual}) matches the scheduled operational "
+                            f"window the endpoint declares ({stated})."
+                        ),
+                        "evidence_source": (
+                            TrustLevel.MEASURED.value
+                            if self.role_confusion
+                            else TrustLevel.UNTRUSTED.value
+                        ),
+                        "evidence_field": field if self.role_confusion else "sni",
+                        "evidence_value": actual if self.role_confusion else metadata.get("sni"),
+                        "decisive": True,
+                    }
+                )
+            return Verdict.IGNORE, claims, "grounded_framing_accepted"
 
         sni = str(metadata.get("sni") or "").lower()
         if (
@@ -333,7 +414,7 @@ class DeterministicProvider:
             )
 
         verdict, attack_type, claims = self._classify(features)
-        verdict, claims, note = self._apply_metadata(verdict, claims, metadata)
+        verdict, claims, note = self._apply_metadata(verdict, claims, metadata, features)
         if verdict is Verdict.IGNORE:
             attack_type = None
 
@@ -381,5 +462,6 @@ def build_provider(config: dict[str, Any]) -> LLMProvider:
         return DeterministicProvider(
             trust_metadata=bool(det.get("trust_metadata", True)),
             injection_susceptible=bool(det.get("injection_susceptible", True)),
+            role_confusion=bool(det.get("role_confusion", True)),
         )
     raise ValueError(f"Unknown agent provider: {provider!r} (expected ollama|deterministic)")

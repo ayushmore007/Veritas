@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -46,6 +45,15 @@ class FlowLabelRecord(BaseModel):
 
     # Phase 2+: maps to CICFlowMeter flow key once capture runs
     capture_hint: dict = Field(default_factory=dict)
+
+    # Which `veritas-testbed generate` run produced this flow. One run = one PCAP = one capture,
+    # which is the grouping unit for train/test splits. None for labels from older runs.
+    run_id: str | None = None
+
+    # Phase 6: how strongly the generator reshaped this flow to evade detection (0 = clean), and
+    # which knob set did it. Benign flows are never reshaped.
+    evasion_strength: float = 0.0
+    evasion_variant: str | None = None
 
     def finalize(
         self,

@@ -520,34 +520,47 @@ with tab_results:
         st.warning("No Phase 9 report yet. Run `veritas-eval run`.")
     else:
         inj = report.get("injection", {})
+        columns = {
+            "undefended": "undefended",
+            "sanitizer": "sanitizer 8a",
+            "consistency": "consistency check",
+            "provenance": "provenance 8b",
+            "provenance_replay": "8b + replay",
+            "twin_ablated": "twin ablated",
+        }
         rows = []
         for tier, label in (
-            ("7a", "7a naive"),
-            ("7b", "7b grounding-aware"),
+            ("7a_naive", "7a naive"),
+            ("7b_grounding_aware", "7b grounding-aware"),
             ("7b_adaptive", "7b adaptive"),
         ):
-            if tier not in inj:
+            entry = inj.get("tiers", {}).get(tier)
+            if not entry:
                 continue
-            entry = inj[tier]
-            rows.append(
-                {
-                    "attack": label,
-                    "undefended": entry["undefended"]["asr"],
-                    "sanitizer 8a": entry["sanitizer_8a"]["asr"],
-                    "consistency check": entry["consistency_baseline"]["asr"],
-                    "verifier + replay": entry["verifier_8b_with_replay"]["asr"],
-                    "twin ablated": entry["verifier_no_twin_ablation"]["asr"],
-                }
-            )
+            row = {"attack": label}
+            for key, name in columns.items():
+                cell = entry.get(key) or {}
+                # A withheld rate still shows its counts, so nothing reads as a silent zero.
+                row[name] = (
+                    cell.get("asr")
+                    if cell.get("asr") is not None
+                    else f"{cell.get('successes', 0)}/{cell.get('attempts', 0)} (withheld)"
+                )
+            rows.append(row)
         st.subheader("Attack success rate by defense")
+        denominator = inj.get("denominator", {}).get("caught_without_injection")
+        if denominator is not None:
+            st.caption(f"Over {denominator} malicious test flows the undefended agent caught.")
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
         fa = report.get("false_alarms", {})
-        if fa.get("false_alarm_rates"):
+        replay_fa = (fa.get("by_defense") or {}).get("provenance_replay")
+        if replay_fa:
             st.metric(
-                "False alarms on honest cleared flows",
-                fa["false_alarm_rates"].get("verifier_8b_with_replay"),
-                help=f"Measured over {fa.get('correctly_cleared_by_agent')} benign flows the "
+                "False alarms on honest cleared flows (8b + replay)",
+                replay_fa["rate"] if replay_fa["rate"] is not None
+                else f"{replay_fa['false_alarms']}/{replay_fa['flows']}",
+                help=f"Measured over {fa.get('honest_cleared_flows')} benign flows the "
                      "agent had correctly cleared, with no injection.",
             )
 

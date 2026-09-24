@@ -3,6 +3,8 @@
 
 pcap:
   default_input: data/raw/pcap/phase1.pcapng
+  # Written by `veritas-testbed generate`; read by `veritas-capture process --manifest`
+  runs_manifest: data/raw/pcap/runs_manifest.json
   filter_ports: [4433, 4434, 4435]
 
 labels:
@@ -29,6 +31,10 @@ port_sni_map:
   4433: benign.internal.test
   4434: c2.malicious.test
   4435: exfil.malicious.test
+
+# Phase 8c packet-level shape features (see veritas/capture/entropy.py). Also `--entropy`.
+entropy:
+  enabled: false
 
 trust:
   config: config/trust_labels.yaml

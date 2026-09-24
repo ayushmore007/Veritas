@@ -99,9 +99,17 @@ def make_splits(
     counts = dict.fromkeys(SPLITS, 0)
     assignment: dict[str, str] = {}
 
-    for key in keys:
-        # Deal to whichever split is furthest below its target.
-        name = max(SPLITS, key=lambda s: targets[s] - counts[s])
+    # With enough groups, give every split (test first) one group before dealing by deficit.
+    # Dealing by deficit alone can leave `test` empty when groups are few and large: three
+    # captures of five flows go train, train, val.
+    seeded = ("test", "val", "train") if len(keys) >= len(SPLITS) else ()
+
+    for i, key in enumerate(keys):
+        if i < len(seeded):
+            name = seeded[i]
+        else:
+            # Deal to whichever split is furthest below its target.
+            name = max(SPLITS, key=lambda s: targets[s] - counts[s])
         for flow in groups[key]:
             assignment[str(flow["flow_id"])] = name
         counts[name] += len(groups[key])
