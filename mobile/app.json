@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Veritas Sentinel",
+    "slug": "veritas-sentinel",
+    "version": "0.1.0",
+    "scheme": "veritas",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#070a12",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.veritas.sentinel",
+      "infoPlist": {
+        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+      }
+    },
+    "android": {
+      "package": "com.veritas.sentinel"
+    },
+    "web": { "bundler": "metro" },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-document-picker",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
+    ],
+    "experiments": { "typedRoutes": false }
+  }
+}

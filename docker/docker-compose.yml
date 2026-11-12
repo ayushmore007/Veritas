@@ -16,6 +16,25 @@ services:
     # Single container runs servers + client orchestrator (works on Windows/macOS/Linux)
     command: ["veritas-testbed", "generate", "--config", "config/testbed.yaml"]
 
+  # Backend for the website and the mobile app.
+  #   export VERITAS_API_KEY="$(openssl rand -hex 24)"
+  #   docker compose -f docker/docker-compose.yml up --build api
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: veritas-api
+    ports:
+      - "8000:8000"
+    environment:
+      - VERITAS_API_KEY=${VERITAS_API_KEY:?set VERITAS_API_KEY before starting the API}
+      # 0 = refuse to scan private/loopback addresses (SSRF guard). Set 1 only on a lab network.
+      - VERITAS_ALLOW_PRIVATE_TARGETS=${VERITAS_ALLOW_PRIVATE_TARGETS:-0}
+      - VERITAS_CORS_ORIGINS=${VERITAS_CORS_ORIGINS:-}
+    volumes:
+      - ../data:/app/data
+    restart: unless-stopped
+
 networks:
   veritas-lab:
     driver: bridge

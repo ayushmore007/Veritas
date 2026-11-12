@@ -152,6 +152,9 @@
       <button class="tab-btn" data-tab="tab-twin" role="tab" id="tabTwinBtn">
         <span>🔬</span> Digital Twin Telemetry Oracle <span class="tab-badge">Measured vs Untrusted</span>
       </button>
+      <button class="tab-btn" data-tab="tab-ml" role="tab" id="tabMlBtn">
+        <span>🧠</span> ML Flow Detector <span class="tab-badge" id="mlBadge">Model</span>
+      </button>
       <button class="tab-btn" data-tab="tab-export" role="tab" id="tabExportBtn">
         <span>📜</span> Remediation & Firewall Rules <span class="tab-badge">Export</span>
       </button>
@@ -280,7 +283,32 @@
 
     </section>
 
-    <!-- Tab 4: Export Remediation & Firewall Rules -->
+    <!-- Tab 4: ML flow detector (trained model: PCAP upload + feature JSON) -->
+    <section class="tab-panel" id="tab-ml" role="tabpanel">
+      <div class="section-header">
+        <div class="section-title-group">
+          <h2>ML Flow Detector</h2>
+          <p>Score QUIC/UDP flows with the trained model. Upload a PCAP, or paste CICFlowMeter-style flow features as JSON.</p>
+        </div>
+        <button id="mlRefresh" class="btn btn-outline btn-sm"><span>🔄</span> Refresh model info</button>
+      </div>
+
+      <div class="ml-grid">
+        <div class="ml-card" id="mlModelCard" aria-live="polite">Loading model info…</div>
+        <div class="ml-card">
+          <h3>Analyze a capture</h3>
+          <input type="file" id="mlPcapFile" accept=".pcap,.pcapng,.cap">
+          <button id="mlPcapBtn" class="btn btn-primary btn-sm"><span>📦</span> Analyze PCAP</button>
+          <h3 style="margin-top:18px">Or score flow features</h3>
+          <textarea id="mlJson" class="text-input" rows="6" spellcheck="false"
+            placeholder='[{"tot_fwd_pkts": 60, "tot_bwd_pkts": 30, "flow_duration": 8.0, "flow_iat_std": 0.01}]'></textarea>
+          <button id="mlJsonBtn" class="btn btn-primary btn-sm"><span>🧮</span> Score flows</button>
+        </div>
+      </div>
+      <div id="mlResults" class="ml-results" aria-live="polite"></div>
+    </section>
+
+    <!-- Tab 5: Export Remediation & Firewall Rules -->
     <section class="tab-panel" id="tab-export" role="tabpanel">
       <div class="section-header">
         <div class="section-title-group">
@@ -527,6 +555,8 @@ nginx -t && systemctl reload nginx'
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toastContainer"></div>
 
+  <script src="api-client.js"></script>
   <script src="app.js"></script>
+  <script src="ml.js"></script>
 </body>
 </html>

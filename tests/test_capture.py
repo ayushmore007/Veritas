@@ -91,3 +91,61 @@ def test_extracted_time_fields_are_in_seconds(tmp_path: Path):
     assert abs(flow["flow_duration"] - 3.0) < 1e-6
     assert abs(flow["flow_iat_max"] - 1.5) < 1e-6
     assert flow["flow_pkts_s"] > 0.5  # rates stay per-second, not rescaled
+
+
+def _row(scale: float) -> dict:
+    """A 3 s, 568-byte flow as CICFlowMeter would report it with time fields multiplied by `scale`."""
+    return {
+        "flow_duration": 3.0 * scale,
+        "flow_iat_max": 1.5 * scale,
+        "fwd_iat_tot": 3.0 * scale,
+        "active_mean": 0.5 * scale,
+        "flow_byts_s": 568 / 3.0,
+        "flow_pkts_s": 4 / 3.0,
+        "totlen_fwd_pkts": 426,
+        "totlen_bwd_pkts": 142,
+        "tot_fwd_pkts": 3,
+        "tot_bwd_pkts": 1,
+    }
+
+
+def test_time_normalisation_handles_both_cicflowmeter_unit_conventions():
+    """0.1.x/0.2.x emit microseconds, 0.5.x emits seconds; both must land on seconds."""
+    from veritas.capture.cicflowmeter_extract import normalize_time_units
+
+    for scale in (1.0, 1e6):
+        row = normalize_time_units(_row(scale))
+        assert abs(row["flow_duration"] - 3.0) < 1e-9
+        assert abs(row["flow_iat_max"] - 1.5) < 1e-9
+        assert abs(row["active_mean"] - 0.5) < 1e-9
+        assert row["flow_pkts_s"] == 4 / 3.0  # rates are never rescaled
+
+
+def test_time_normalisation_leaves_zero_duration_flows_alone():
+    from veritas.capture.cicflowmeter_extract import normalize_time_units
+
+    row = {"flow_duration": 0, "flow_iat_max": 0, "flow_byts_s": 0, "flow_pkts_s": 0}
+    assert normalize_time_units(dict(row)) == row
+
+
+def test_first_packet_is_counted_once(tmp_path: Path):
+    """cicflowmeter 0.5 double-counts a flow's first packet; extraction must not."""
+    import pytest
+    from scapy.all import IP, UDP, Ether, wrpcap
+
+    from veritas.capture.cicflowmeter_extract import extract_flows_from_pcap
+
+    pkts = []
+    for i, t in enumerate((1000.0, 1001.0, 1002.5)):
+        sp, dp = (40000, 4433) if i % 2 == 0 else (4433, 40000)
+        p = Ether() / IP(src="127.0.0.1", dst="127.0.0.1") / UDP(sport=sp, dport=dp) / (b"x" * 100)
+        p.time = t
+        pkts.append(p)
+    pcap = tmp_path / "three.pcap"
+    wrpcap(str(pcap), pkts)
+
+    flow = extract_flows_from_pcap(pcap)[0]
+    assert flow["tot_fwd_pkts"] + flow["tot_bwd_pkts"] == 3
+    assert flow["totlen_fwd_pkts"] + flow["totlen_bwd_pkts"] == 3 * 142
+    assert flow["flow_iat_min"] == pytest.approx(1.0)  # no phantom zero from the duplicate
+    assert flow["flow_iat_max"] == pytest.approx(1.5)

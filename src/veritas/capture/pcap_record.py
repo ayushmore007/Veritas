@@ -88,15 +88,31 @@ class PcapRecorder:
         logger.info("Recording PCAP via tshark (%s) -> %s", iface, self.output_path)
         return True
 
+    def _bpf_available(self) -> bool:
+        """Scapy compiles BPF via libpcap, or by shelling out to `tcpdump -ddd` on Linux."""
+        from scapy.all import conf
+
+        return bool(conf.use_pcap or shutil.which("tcpdump"))
+
+    def _wanted(self, pkt) -> bool:
+        """Python equivalent of `bpf_filter`, for hosts that have no way to compile BPF."""
+        if not pkt.haslayer("UDP"):
+            return False
+        udp = pkt["UDP"]
+        return int(udp.sport) in self.ports or int(udp.dport) in self.ports
+
     def _start_scapy(self) -> None:
         from scapy.all import AsyncSniffer, conf
 
         # The testbed talks over 127.0.0.1. Without an explicit iface scapy sniffs the
         # default-route interface and records nothing.
         iface = self.interface or conf.loopback_name
+        # With neither libpcap nor tcpdump, scapy cannot compile a BPF `filter=`; its sniffer thread
+        # then dies on start-up and the run "succeeds" with an empty capture. Filter in Python.
+        kwargs: dict = {"filter": self.bpf_filter} if self._bpf_available() else {"lfilter": self._wanted}
         # AsyncSniffer can be stopped without waiting for another packet to arrive; a plain
         # sniff(stop_filter=...) thread outlives the run and keeps capturing into the next one.
-        self._sniffer = AsyncSniffer(iface=iface, filter=self.bpf_filter, store=True)
+        self._sniffer = AsyncSniffer(iface=iface, store=True, **kwargs)
         try:
             self._sniffer.start()
         except Exception:
@@ -104,7 +120,8 @@ class PcapRecorder:
             self._sniffer = None
             return
         self._backend = "scapy"
-        logger.info("Recording PCAP via scapy on %s filter=%s", iface, self.bpf_filter)
+        mode = "bpf" if "filter" in kwargs else "python lfilter (no libpcap/tcpdump)"
+        logger.info("Recording PCAP via scapy on %s, %s, ports=%s", iface, mode, self.ports)
 
     def stop(self) -> int:
         if self._backend == "tshark" and self._tshark_proc is not None:

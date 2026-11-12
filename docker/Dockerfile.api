@@ -1,0 +1,24 @@
+# Veritas backend: website + REST API + trained model.  Build from the repo root:
+#   docker build -f docker/Dockerfile.api -t veritas-api .
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md requirements.txt ./
+COPY src ./src
+COPY config ./config
+COPY web ./web
+COPY models ./models
+RUN pip install ".[api]" && useradd --create-home veritas && mkdir -p data && chown -R veritas /app/data
+USER veritas
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+  CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+
+# Binding 0.0.0.0 makes the server refuse to start unless VERITAS_API_KEY is set.
+CMD ["veritas-api", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]

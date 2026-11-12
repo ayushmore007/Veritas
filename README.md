@@ -48,22 +48,66 @@ python scripts/setup_check.py
 
 Mininet is Linux-native. Use **WSL2 (Ubuntu)** or **Docker** for Phases 1+ testbed work. Phase 0 scaffolding runs on native Windows.
 
-## Live Web Dashboard & Security Interface
+## The product: backend + website + mobile app + trained model
 
-Launch the interactive **Veritas Sentinel Security Dashboard**:
-
-```bash
-python web/server.py            # listens on 127.0.0.1:8000
+```
+ mobile/ (Expo app) ──┐
+                      ├──►  veritas-api (FastAPI, src/veritas/api)  ──►  trained flow detector (models/flow-detector)
+ web/ (dashboard) ────┘            │                                    └─ SHAP per-flow explanations
+                                   ├──►  live scanner (web/scanner.py) ─► digital twin DB
+                                   └──►  scan history, prevention registry
 ```
 
-The scanner probes whatever host you give it, so the server binds to loopback and rejects
-cross-origin API calls. Use `--host` only on a network you control. Live scans are recorded in
-`data/processed/twin/live_scans.db`, never in the research twin (`twin.db`).
+### 1. Backend + website
 
-- **Server Identification**: Inspect target nodes (`cdn-edge-3`, `api-sync-7`, `backup-01`, or custom endpoints).
-- **Security Test Battery**: 7 in-depth tests (QUIC handshake, C2 beaconing, Exfiltration entropy, Metadata prompt injection, ML evasion, Twin replay).
-- **Security Strength Index (0–100%)**: Real-time gauge and posture assessment.
-- **Automated Prevention Engine**: One-click deployment of Provenance Verifiers, SNI Sanitizers, Rate Limiters, and Firewall filters.
+```bash
+pip install -e ".[dev]"
+veritas-api                       # http://localhost:8000  (website)  ·  /docs (interactive API docs)
+```
+
+- Binds to loopback by default and serves loopback clients only. To reach it from a phone or Docker,
+  set a key and bind wide — the server refuses to start otherwise:
+  `export VERITAS_API_KEY="$(openssl rand -hex 24)"; veritas-api --host 0.0.0.0`
+- **The scanner probes hosts you point it at.** Scan only systems you own or are authorised to test.
+  As a guard against using the server as a pivot (SSRF), targets that resolve to private, loopback or
+  link-local addresses are refused unless `VERITAS_ALLOW_PRIVATE_TARGETS=1` (lab networks only).
+  Scans are rate-limited per client.
+- The website (`web/`) has five tabs: security tests, prevention engine, digital-twin telemetry, the
+  **ML Flow Detector**, and export. `python web/server.py` still works and just launches `veritas-api`.
+
+| Endpoint (`/api/v1/…`, also at `/api/…`) | |
+|---|---|
+| `GET /health` | public liveness probe |
+| `GET /status`, `GET /topology` | engine state, lab topology |
+| `POST /scan` `{"target": "host[:port]"}` | live security scan → report (saved to history) |
+| `GET/DELETE /scans/history` | persisted scans |
+| `POST /verify-fix`, `POST /prevention/apply` | check a fix is live; register an engine-side control |
+| `GET /twin/flows` | digital-twin flows |
+| `GET /model` | trained model card: version, threshold, held-out metrics **with intervals**, limitations |
+| `POST /predict` `{"flows":[{…}]}` | score CICFlowMeter-style flows → verdict, probability, top contributing features |
+| `POST /analyze/pcap` (multipart `file`) | extract every flow from a PCAP/PCAPNG and score each |
+
+Protected routes take `X-API-Key` when `VERITAS_API_KEY` is set. Config knobs are in `.env.example`.
+
+### 2. Mobile app
+
+`mobile/` is an Expo (React Native + TypeScript) app for iOS, Android and web: scan, history, ML
+detector, settings. See [`mobile/README.md`](mobile/README.md).
+
+### 3. The ML model
+
+The deployed model is a scikit-learn tree ensemble over behavioural flow features. Rebuild it with the
+steps in **[docs/TRAINING.md](docs/TRAINING.md)** — in short:
+
+```bash
+python scripts/reproduce.py --quick --runs 150 --seed 1 --entropy \
+    --evasion-strengths 0.25,0.5,0.75,1 --evasion-runs 6 \
+    --held-out-variants timing_only,volume_only,chunk_only,cover_only   # build the labelled corpus
+veritas-train check          # is the corpus big/varied enough?
+veritas-train fit            # select, train, evaluate -> models/flow-detector/{model.joblib,metrics.json,MODEL_CARD.md}
+```
+
+Docker: `export VERITAS_API_KEY=…; docker compose -f docker/docker-compose.yml up --build api`.
 
 ## Reproduce everything
 
@@ -145,6 +189,12 @@ src/veritas/     Phase-aligned Python packages
                  (8c entropy features live in capture/entropy.py)
   baselines/     Phase 5 — ML baseline, SHAP, faithfulness test
   eval/          Phase 9 — splits, stability, live experiment runners, figures
+  training/      `veritas-train` — grouped-CV model selection, thresholding, evaluation, model card
+  api/           `veritas-api` — FastAPI backend for the website and the mobile app
+  inference.py   loads the trained model; scores flows/PCAPs with explanations
+web/             Website (dashboard UI) + the live scanner engine
+mobile/          Expo mobile app
+models/          Trained model + model card (rebuild with `veritas-train fit`)
 config/          YAML configuration and trust labels
 docs/            Plans, threat model, bibliography
 scripts/         Setup and license checks

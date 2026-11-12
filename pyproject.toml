@@ -27,8 +27,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.1"]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "ruff>=0.1", "fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]
 demo = ["streamlit>=1.30"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]
 
 [project.scripts]
 veritas-testbed = "veritas.testbed.cli:main"
@@ -37,6 +38,8 @@ veritas-twin = "veritas.twin.cli:main"
 veritas-agent = "veritas.agent.cli:main"
 veritas-baseline = "veritas.baselines.cli:main"
 veritas-eval = "veritas.eval.cli:main"
+veritas-train = "veritas.training.cli:main"
+veritas-api = "veritas.api.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
