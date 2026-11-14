@@ -99,7 +99,7 @@ class _OfflineFlowSession(FlowSession):
 
     CICFlowMeter reads its output settings from class attributes (0.1.9 uses `output_file`, 0.2.x
     uses `output`), and has no public "process one packet" / "flush" API. Setting both attribute
-    names and calling `process` / `garbage_collect(None)` works on either version.
+    names and calling `on_packet_received` / `garbage_collect(None)` works on either version.
 
     0.5.x additionally builds its writer inside `__init__` from `output_mode`/`output` arguments and
     raises when they are missing, so we hand it a throwaway devnull CSV writer; `_ListWriter`
@@ -150,8 +150,11 @@ def extract_flows_from_pcap(
                     dp = int(pkt["UDP"].dport)
                     if sp not in port_set and dp not in port_set:
                         continue
-                # 0.5+ renamed the per-packet entry point; older releases only have the scapy hook.
-                feed = getattr(session, "process", None) or session.on_packet_received
+                # The per-packet entry point differs by release: cicflowmeter 0.2.x defines
+                # `on_packet_received`; 0.5.x defines `process` instead. Order matters: scapy's
+                # DefaultSession also has a no-op `process`, so testing for `process` first would
+                # silently extract zero flows on 0.2.x (that is how CI on Python 3.11 caught it).
+                feed = getattr(session, "on_packet_received", None) or session.process
                 feed(pkt)
                 processed += 1
     except Exception as exc:
