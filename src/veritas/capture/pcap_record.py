@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -36,9 +37,16 @@ class PcapRecorder:
         return f"udp and ({port_expr})"
 
     def start(self) -> None:
+        """Start recording. `VERITAS_PCAP_BACKEND=scapy|tshark` forces one backend (default: auto)."""
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        if shutil.which("tshark"):
+        choice = os.environ.get("VERITAS_PCAP_BACKEND", "auto").strip().lower()
+        if choice not in ("auto", "tshark", "scapy"):
+            logger.warning("Unknown VERITAS_PCAP_BACKEND=%r; using auto", choice)
+            choice = "auto"
+        if choice in ("auto", "tshark") and shutil.which("tshark"):
             if self._start_tshark():
+                return
+            if choice == "tshark":
                 return
         self._start_scapy()
 
@@ -80,6 +88,27 @@ class PcapRecorder:
                 "tshark exited on %s (%s); falling back to scapy",
                 iface,
                 err.decode(errors="replace").strip()[:300],
+            )
+            self._tshark_proc = None
+            return False
+
+        # A tshark that is "running" but never creates its output file is not capturing (seen under
+        # WSL/sudo setups). dumpcap creates the file as soon as it starts, so allow it a moment and
+        # fall back to scapy rather than silently recording nothing.
+        deadline = time.monotonic() + 2.0
+        while not self.output_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if not self.output_path.exists():
+            self._tshark_proc.terminate()
+            err = b""
+            try:
+                err = (self._tshark_proc.communicate(timeout=3)[1] or b"")
+            except Exception:
+                self._tshark_proc.kill()
+            logger.warning(
+                "tshark is running on %s but wrote no file (%s); falling back to scapy",
+                iface,
+                err.decode(errors="replace").strip()[:300] or "no error output",
             )
             self._tshark_proc = None
             return False

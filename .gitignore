@@ -19,6 +19,7 @@ data/external/
 data/logs/
 *.pcap
 *.pcapng
+!samples/*.pcapng
 
 # Cloned reference repos (check LICENSE before reuse)
 references/

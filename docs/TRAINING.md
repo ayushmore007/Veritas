@@ -128,5 +128,6 @@ Read these carefully:
 | Durations 10⁶× too small | `cicflowmeter` ≥ 0.5 reports seconds; ≤ 0.2 reported microseconds | Scale inferred per flow from `bytes / flow_byts_s` |
 | Packet/byte counts +1 packet, `flow_iat_min` always 0 | `cicflowmeter` 0.5.x counts each flow's first packet twice | Extractor counts it once |
 | `RuntimeError: no output_mode provided` | 0.5.x API change | Extractor supports both APIs |
+| `0 packets` recorded although `tshark` is installed (seen on WSL + sudo) | tshark started but wrote no file | Recorder now detects the missing file and falls back to scapy; `VERITAS_PCAP_BACKEND=scapy` forces scapy. Meanwhile `samples/sample-run.pcapng` needs no capture |
 | 0 flows extracted on Python 3.11 (CI caught it) | pip installs `cicflowmeter` 0.2.0 there (0.5.0 needs a newer Python); its per-packet entry point is `on_packet_received`, 0.5.x's is `process`, and scapy's base class has a no-op `process` | Extractor picks the entry point the library actually defines; tested on both 0.2.0 and 0.5.0 |
 | `pip install` fails on `lime` | `setuptools` ≥ 81 removed `install_layout` | see §2 |
